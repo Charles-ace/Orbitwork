@@ -56,7 +56,7 @@ interface Agent {
   accent: string;
 }
 
-const API_BASE = 'http://localhost:5005/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5005/api';
 
 const iconMap: Record<string, React.ReactNode> = {
   cpu: <Cpu size={18} />,
