@@ -413,12 +413,14 @@ app.delete('/api/agents/:id', (req, res) => {
 
 // ── Start Server ─────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`\n  ⚡ Orbitjob Backend [Mock Onchain Mode]`);
-  console.log(`  → http://localhost:${PORT}`);
-  console.log(`  → ${taskCache.length} tasks | ${agents.length} agents`);
-  console.log(`  → Mock Bridge active — ${mockLedger.length} transactions logged`);
-  console.log();
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`\n  ⚡ Orbitjob Backend [Mock Onchain Mode]`);
+    console.log(`  → http://localhost:${PORT}`);
+    console.log(`  → ${taskCache.length} tasks | ${agents.length} agents`);
+    console.log(`  → Mock Bridge active — ${mockLedger.length} transactions logged`);
+    console.log();
+  });
+}
 
 module.exports = app;
