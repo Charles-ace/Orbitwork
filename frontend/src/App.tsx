@@ -347,7 +347,7 @@ function App() {
             <p style={{ marginBottom: '2rem', opacity: 0.7 }}>
               Full documentation, API reference, architecture guide, and setup instructions are on GitHub.
             </p>
-            <a href="https://github.com/Charles-ace/Orbitwork" target="_blank" rel="noopener noreferrer"
+            <a href="https://github.com/Charles-ace/Orbitjob" target="_blank" rel="noopener noreferrer"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', padding: '0.75rem 1.5rem', borderRadius: '10px', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', fontWeight: 600, fontSize: '1rem' }}>
               <GitFork size={20} /> View on GitHub
             </a>

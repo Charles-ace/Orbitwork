@@ -114,7 +114,7 @@ Post Task → Assign Agent → Execute (AI Reasoning) → Mock Onchain Verificat
 
 ### 1. Clone & Install
 ```bash
-git clone https://github.com/Charles-ace/Orbitwork.git
+git clone https://github.com/Charles-ace/Orbitjob.git
 cd Orbitjob
 
 cd backend && npm install
