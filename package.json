@@ -4,7 +4,8 @@
   "description": "Orbitjob AI Task Marketplace Workspace",
   "private": true,
   "scripts": {
-    "opencode": "opencode"
+    "build": "cd frontend && npm install && npm run build",
+    "opencode": "node scripts/opencode.js"
   },
   "devDependencies": {
     "opencode-ai": "latest"
