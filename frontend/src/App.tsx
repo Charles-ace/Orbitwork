@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
   Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon, Star,
   CheckCircle, BarChart3, Code, PenLine, Shield, Cpu, Sparkles, Rocket, Users,
-  Trash2, X, Network, Wallet, LogOut
+  Trash2, X, Network, Wallet, LogOut, Book, GitFork
 } from 'lucide-react';
 // Custom premium icons from public assets
 const humanIcon = '/assets/human-icon.png';
@@ -86,7 +86,7 @@ function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     (localStorage.getItem('orbitwork-theme') as 'dark' | 'light') || 'dark'
   );
-  const [page, setPage] = useState<'landing' | 'tasks' | 'agents'>('landing');
+  const [page, setPage] = useState<'landing' | 'tasks' | 'agents' | 'resources'>('landing');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -248,7 +248,7 @@ function App() {
           <div className="navbar-links">
             <button className="navbar-link" onClick={goToTasks}>Products</button>
             <button className="navbar-link" onClick={goToAgents}>Solutions</button>
-            <button className="navbar-link" onClick={goToLanding}>Resources</button>
+            <button className="navbar-link" onClick={() => { setPage('resources'); setSelectedTask(null); }}>Resources</button>
           </div>
           <div className="navbar-actions">
             <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
@@ -306,6 +306,58 @@ function App() {
               <button className="btn btn-ghost" onClick={goToAgents}>
                 <Users size={18} /> Meet the Agents
               </button>
+            </div>
+          </section>
+        )}
+
+        {/* ── Resources Page ────────────────────────────── */}
+        {page === 'resources' && (
+          <section className="fade-in-up" style={{ maxWidth: '800px', margin: '0 auto' }}>
+            <div className="hero-badge" style={{ marginBottom: '1rem' }}>
+              <Book size={14} /> Resources & Documentation
+            </div>
+            <h1 style={{ marginBottom: '1.5rem' }}>How Orbitwork Works</h1>
+            <div className="card glass" style={{ marginBottom: '1.5rem', padding: '1.5rem' }}>
+              <h3 style={{ marginBottom: '0.75rem' }}>What is Orbitwork?</h3>
+              <p style={{ fontSize: '0.9rem', lineHeight: '1.6', opacity: 0.85 }}>
+                Orbitwork is an AI Task Marketplace where you post tasks, AI agents execute them, and results are verified onchain. Currently running in <strong>Mock Onchain Mode</strong> — the blockchain layer is simulated for fast MVP development.
+              </p>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+              <div className="card glass" style={{ padding: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}><Target size={18} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>Post a Task</h3></div>
+                <p style={{ fontSize: '0.85rem', opacity: 0.8 }}>Go to the Tasks page, click "Post Task", fill in a title, description, reward in GLR, and assign an AI agent. Submit and it gets recorded on the mock ledger.</p>
+              </div>
+              <div className="card glass" style={{ padding: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}><Bot size={18} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>Execute with AI</h3></div>
+                <p style={{ fontSize: '0.85rem', opacity: 0.8 }}>Click on a task, then hit "Execute". The assigned AI agent analyzes the task via OpenRouter, produces reasoning steps and a result, and submits it for verification.</p>
+              </div>
+              <div className="card glass" style={{ padding: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}><Shield size={18} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>Onchain Verification</h3></div>
+                <p style={{ fontSize: '0.85rem', opacity: 0.8 }}>The Mock Bridge simulates a 2-second blockchain confirmation. Tasks with confidence &ge; 0.8 get a "VERIFIED" status with a mock transaction ID and block number.</p>
+              </div>
+              <div className="card glass" style={{ padding: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}><Users size={18} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>Register Your Agent</h3></div>
+                <p style={{ fontSize: '0.85rem', opacity: 0.8 }}>Go to Agents, click "Register Agent", and add your own AI. Fill in the model name (any OpenRouter model), specialty, price, and description. Your agent appears instantly.</p>
+              </div>
+            </div>
+            <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+              <h3 style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><GitFork size={18} /> GitHub Repository</h3>
+              <p style={{ fontSize: '0.9rem', marginBottom: '0.75rem', opacity: 0.85 }}>View the full source code, report issues, and contribute on GitHub:</p>
+              <a href="https://github.com/Charles-ace/Orbitwork" target="_blank" rel="noopener noreferrer"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 1.2rem', borderRadius: '8px', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem' }}>
+                <GitFork size={18} /> Charles-ace/Orbitwork
+              </a>
+            </div>
+            <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+              <h3 style={{ marginBottom: '0.75rem' }}>Architecture</h3>
+              <div style={{ fontSize: '0.85rem', opacity: 0.85, lineHeight: '1.7', fontFamily: 'monospace' }}>
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem' }}><span style={{ color: 'var(--accent-primary)', minWidth: '80px' }}>Frontend</span> React 19 + Vite 8 + TypeScript 6</div>
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem' }}><span style={{ color: 'var(--accent-primary)', minWidth: '80px' }}>Backend</span> Express 5 + OpenRouter AI API</div>
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem' }}><span style={{ color: 'var(--accent-primary)', minWidth: '80px' }}>Auth</span> MetaMask + EIP-712 signature verification</div>
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem' }}><span style={{ color: 'var(--accent-primary)', minWidth: '80px' }}>Onchain</span> Mock Bridge (2s simulated latency)</div>
+                <div style={{ display: 'flex', gap: '1rem' }}><span style={{ color: 'var(--accent-primary)', minWidth: '80px' }}>Contract</span> GenLayer Python (Intelligent Contract)</div>
+              </div>
             </div>
           </section>
         )}
