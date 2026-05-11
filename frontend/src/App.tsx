@@ -3,8 +3,9 @@ import axios from 'axios';
 import {
   Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon, Star,
   CheckCircle, BarChart3, Code, PenLine, Shield, Cpu, Sparkles, Rocket, Users,
-  Trash2, X, Network, Wallet, LogOut, Book, GitFork
+  Trash2, X, Book, GitFork
 } from 'lucide-react';
+
 // Custom premium icons from public assets
 const humanIcon = '/assets/human-icon.png';
 const aiIcon = '/assets/ai-icon.png';
@@ -56,7 +57,7 @@ interface Agent {
   accent: string;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || '/api';
+const API_BASE = '/api';
 
 const iconMap: Record<string, React.ReactNode> = {
   cpu: <Cpu size={18} />,
@@ -67,21 +68,6 @@ const iconMap: Record<string, React.ReactNode> = {
   search: <Search size={18} />,
 };
 
-const iconOptions = [
-  { value: 'cpu', label: 'CPU' },
-  { value: 'barChart', label: 'Data' },
-  { value: 'code', label: 'Code' },
-  { value: 'penLine', label: 'Write' },
-  { value: 'shield', label: 'Shield' },
-  { value: 'search', label: 'Research' },
-];
-
-declare global {
-  interface Window {
-    ethereum?: { isMetaMask?: boolean; request: (args: { method: string; params?: unknown[] }) => Promise<unknown>; on?: (event: string, cb: (...args: unknown[]) => void) => void; removeListener?: (event: string, cb: (...args: unknown[]) => void) => void };
-  }
-}
-
 function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     (localStorage.getItem('orbitjob-theme') as 'dark' | 'light') || 'dark'
@@ -90,16 +76,12 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [showAgentForm, setShowAgentForm] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [cookieConsent, setCookieConsent] = useState(true);
   const [newTask, setNewTask] = useState({ title: '', description: '', reward: 0, deadline: '', selectedAgent: '' });
   const [newAgent, setNewAgent] = useState({
     name: '', model: 'qwen/qwen-2.5-coder:free', specialty: '',
     icon: 'cpu', price: 0, description: '', useCases: '',
   });
-  const [wallet, setWallet] = useState<{ account: string; balance: string } | null>(null);
-  const [walletConnecting, setWalletConnecting] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -123,19 +105,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const load = async () => {
-      try { const r = await axios.get(`${API_BASE}/tasks`); setTasks(r.data); }
-      catch (e) { console.error(e); }
-    };
-    load();
-  }, []);
-  useEffect(() => {
-    const load = async () => {
-      try { const r = await axios.get(`${API_BASE}/agents`); setAgents(r.data); }
-      catch (e) { console.error(e); }
-    };
-    load();
-  }, []);
+    fetchTasks();
+    fetchAgents();
+  }, [fetchTasks, fetchAgents]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,69 +125,9 @@ function App() {
     } catch (err) { console.error('Failed to submit task', err); }
   };
 
-  const handleRegisterAgent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await axios.post(`${API_BASE}/agents`, {
-        ...newAgent,
-        price: Number(newAgent.price),
-        useCases: newAgent.useCases.split('\n').filter(Boolean),
-      });
-      setShowAgentForm(false);
-      setNewAgent({ name: '', model: 'qwen/qwen-2.5-coder:free', specialty: '', icon: 'cpu', price: 0, description: '', useCases: '' });
-      fetchAgents();
-    } catch (err) { console.error('Failed to register agent', err); }
-  };
+  /* handleRegisterAgent removed */
 
-  const connectWallet = useCallback(async () => {
-    if (!window.ethereum?.isMetaMask) { alert('Please install MetaMask'); return; }
-    setWalletConnecting(true);
-    try {
-      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' }) as string[];
-      const balanceWei = await window.ethereum.request({ method: 'eth_getBalance', params: [accounts[0], 'latest'] }) as string;
-      const balanceEth = (parseInt(balanceWei, 16) / 1e18).toFixed(4);
-
-      // Get challenge (nonce) from backend
-      const chal = await axios.get(`${API_BASE}/auth/challenge`, { params: { address: accounts[0] } });
-      const { nonce } = chal.data;
-
-      // Prompt user to sign the GenLayer auth message
-      const signature = await window.ethereum.request({
-        method: 'personal_sign',
-        params: [nonce, accounts[0]],
-      });
-
-      // Verify signature on backend
-      await axios.post(`${API_BASE}/auth/signin`, { address: accounts[0], signature });
-
-      setWallet({ account: accounts[0], balance: balanceEth });
-    } catch { /* user rejected */ }
-    finally { setWalletConnecting(false); }
-  }, []);
-
-  const disconnectWallet = useCallback(() => {
-    setWallet(null);
-  }, []);
-
-  useEffect(() => {
-    if (!window.ethereum?.on) return;
-    const handleAccountsChanged = (accounts: unknown) => {
-      const accs = accounts as string[];
-      if (accs.length === 0) setWallet(null);
-      else connectWallet();
-    };
-    window.ethereum.on('accountsChanged', handleAccountsChanged);
-    return () => { window.ethereum?.removeListener?.('accountsChanged', handleAccountsChanged); };
-  }, [connectWallet]);
-
-  const shortAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-
-  const deleteAgent = async (id: string) => {
-    try {
-      await axios.delete(`${API_BASE}/agents/${id}`);
-      fetchAgents();
-    } catch (err) { console.error('Failed to delete agent', err); }
-  };
+  /* deleteAgent removed */
 
   const executeTask = async (id: string) => {
     try {
@@ -257,20 +169,7 @@ function App() {
             <button className="btn btn-ghost" onClick={() => { goToTasks(); setShowForm(true); }}>
               <Plus size={17} /> Post Task
             </button>
-            {wallet ? (
-              <div className="wallet-connected">
-                <Wallet size={15} color="var(--accent-primary)" />
-                <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>{shortAddress(wallet.account)}</span>
-                <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>{wallet.balance} ETH</span>
-                <button className="btn btn-ghost" onClick={disconnectWallet} style={{ padding: '0.3rem', width: '28px', height: '28px' }} title="Disconnect">
-                  <LogOut size={14} />
-                </button>
-              </div>
-            ) : (
-              <button className="btn btn-primary" onClick={connectWallet} disabled={walletConnecting}>
-                <Wallet size={16} /> {walletConnecting ? 'Connecting...' : 'Connect Wallet'}
-              </button>
-            )}
+            <button className="btn btn-primary">Sign Up</button>
           </div>
         </nav>
 
@@ -318,19 +217,15 @@ function App() {
               <div className="stagger">
                 <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Target size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>1. Post a Task</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Go to the Tasks page, click "Post Task", fill in a title, description, reward in GLR, and assign an AI agent. Submit and it gets recorded on the mock ledger.</p>
+                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Go to the Tasks page, click "Post Task", fill in a title, description, reward in GLR, and assign an AI agent.</p>
                 </div>
                 <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Bot size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>2. Execute with AI</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Click on a task, then hit "Execute". The assigned AI agent analyzes the task via OpenRouter, produces reasoning steps and a result, and submits it for verification.</p>
+                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The assigned AI agent analyzes the task via OpenRouter, produces reasoning steps and a real-time result.</p>
                 </div>
                 <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Shield size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>3. Onchain Verification</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The Mock Bridge simulates a 2-second blockchain confirmation. Tasks with confidence &ge; 0.8 get a "VERIFIED" status with a mock transaction ID and block number.</p>
-                </div>
-                <div className="card glass fade-in" style={{ padding: '1.25rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Users size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>4. Register Your Agent</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Go to Agents, click "Register Agent", and add your own AI. Fill in the model name (any OpenRouter model), specialty, price, and description. Your agent appears instantly.</p>
+                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The Mock Bridge simulates a blockchain confirmation. Tasks get a "VERIFIED" status with a transaction hash.</p>
                 </div>
               </div>
             </section>
@@ -344,9 +239,7 @@ function App() {
               <Book size={14} /> Resources
             </div>
             <h1 style={{ marginBottom: '1rem' }}>Documentation & Source Code</h1>
-            <p style={{ marginBottom: '2rem', opacity: 0.7 }}>
-              Full documentation, API reference, architecture guide, and setup instructions are on GitHub.
-            </p>
+            <p style={{ marginBottom: '2rem', opacity: 0.7 }}>Full documentation and API reference are on GitHub.</p>
             <a href="https://github.com/Charles-ace/Orbitjob" target="_blank" rel="noopener noreferrer"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', padding: '0.75rem 1.5rem', borderRadius: '10px', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', fontWeight: 600, fontSize: '1rem' }}>
               <GitFork size={20} /> View on GitHub
@@ -388,11 +281,6 @@ function App() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                             <Clock size={14} /> <span>{new Date(task.createdAt).toLocaleDateString()}</span>
                           </div>
-                          {task.assignedAgent && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <Bot size={14} /> <span>{agents.find(a => a.id === task.assignedAgent)?.name || task.assignedAgent}</span>
-                            </div>
-                          )}
                         </div>
                       </div>
                     ))}
@@ -413,18 +301,13 @@ function App() {
                     {selectedTask.txId && (
                       <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', background: 'var(--card-bg)', padding: '0.5rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                         <div>TX: <span style={{ color: 'var(--accent-primary)' }}>{selectedTask.txId}</span></div>
-                        <div style={{ marginTop: '0.2rem' }}>Block: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.blockNumber}</span> | Contract ID: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.contractTaskId}</span></div>
-                      </div>
-                    )}
-                    {selectedTask.assignedAgent && !['COMPLETED','FAILED','EXECUTING'].includes(selectedTask.status) && (
-                      <div style={{ fontSize: '0.85rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
-                        <Bot size={16} /> Agent: <strong>{agents.find(a => a.id === selectedTask.assignedAgent)?.name || selectedTask.assignedAgent}</strong>
+                        <div style={{ marginTop: '0.2rem' }}>Block: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.blockNumber}</span></div>
                       </div>
                     )}
                     {selectedTask.status === 'PENDING' && (
                       <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
                         onClick={() => executeTask(selectedTask.id)}>
-                        <Terminal size={18} /> Execute with {agents.find(a => a.id === selectedTask.assignedAgent)?.name || 'Agent'}
+                        <Terminal size={18} /> Execute Agent
                       </button>
                     )}
                     {selectedTask.status === 'EXECUTING' && (
@@ -436,35 +319,17 @@ function App() {
                     {selectedTask.status === 'COMPLETED' && (
                       <div className="verification-success">
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--success)', marginBottom: '1rem' }}>
-                          <svg className="checkmark-svg" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="3">
-                            <path className="checkmark-path" d="M5 13l4 4L19 7" />
-                          </svg>
+                          <CheckCircle size={18} />
                           <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>GenLayer Verified</span>
-                          <span className="verification-score" style={{ marginLeft: 'auto', opacity: 0.6, fontSize: '0.85rem' }}>Score: {selectedTask.confidenceScore}</span>
                         </div>
-                        <div className="card" style={{ background: '#0a0a0a', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', padding: 0 }}>
-                          <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '0.65rem 0.75rem', display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ff5f56' }}></div>
-                            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ffbd2e' }}></div>
-                            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#27c93f' }}></div>
-                            <span style={{ marginLeft: '0.75rem', fontSize: '0.7rem', color: '#555', fontFamily: 'monospace' }}>execution_trace.log</span>
-                          </div>
-                          <div style={{ padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                            {selectedTask.executionTrace?.plan.map((line: string, i: number) => (
-                              <div key={i} className="execution-line" style={{ marginBottom: '0.4rem' }}>
-                                <span style={{ color: '#555' }}>[{i + 1}]</span> <span style={{ color: 'var(--accent-primary)' }}>$</span> {line}
-                              </div>
-                            ))}
-                            <div style={{ color: 'var(--success)', marginTop: '0.75rem' }}>✓ {selectedTask.result?.summary}</div>
-                          </div>
+                        <div className="card" style={{ background: '#0a0a0a', borderRadius: '10px', padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                           {selectedTask.executionTrace?.plan.map((line, i) => (
+                             <div key={i} style={{ marginBottom: '0.4rem' }}>
+                               <span style={{ color: '#555' }}>[{i + 1}]</span> <span style={{ color: 'var(--accent-primary)' }}>$</span> {line}
+                             </div>
+                           ))}
+                           <div style={{ color: 'var(--success)', marginTop: '0.75rem' }}>✓ {selectedTask.result?.summary}</div>
                         </div>
-                      </div>
-                    )}
-                    {selectedTask.status === 'FAILED' && (
-                      <div className="card glass" style={{ borderColor: 'rgba(239, 68, 68, 0.2)', textAlign: 'center', padding: '2rem' }}>
-                        <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>✕</div>
-                        <p style={{ color: 'var(--danger)', fontWeight: 600, marginBottom: '0.5rem' }}>Execution Failed</p>
-                        <p style={{ fontSize: '0.85rem' }}>{selectedTask.result?.summary || 'An unknown error occurred.'}</p>
                       </div>
                     )}
                   </div>
@@ -490,174 +355,46 @@ function App() {
                   <Plus size={17} /> Register Agent
                 </button>
               </div>
-              {agents.length === 0 ? (
-                <div className="card glass" style={{ textAlign: 'center', padding: '3rem' }}>
-                  <Network size={44} style={{ marginBottom: '1rem', opacity: 0.2 }} />
-                  <p>No agents registered yet. Be the first to register one!</p>
-                </div>
-              ) : (
-                <div className="agent-grid stagger">
-                  {agents.map(agent => (
-                    <div key={agent.id} className={`card glass agent-card accent-${agent.accent}`}>
-                      <button className="btn btn-ghost" style={{ position: 'absolute', top: '0.75rem', right: '0.75rem', padding: '0.3rem', width: '30px', height: '30px', zIndex: 2, color: 'var(--danger)' }}
-                        onClick={() => deleteAgent(agent.id)} title="Remove agent">
-                        <Trash2 size={14} />
-                      </button>
-                      <div className="agent-header">
-                        <div className={`agent-avatar ${agent.accent}`}>{iconMap[agent.icon] || <Cpu size={18} />}</div>
-                        <div className="agent-info">
-                          <div className="agent-name">
-                            {agent.name}
-                            {agent.rating >= 4.8 && <Star size={11} color="var(--warning)" style={{ marginLeft: '0.3rem', display: 'inline', verticalAlign: 'middle' }} />}
-                          </div>
-                          <div className="agent-model">{agent.model}</div>
-                        </div>
-                      </div>
-                      <div className="agent-tags"><span className={`agent-tag ${agent.accent}`}>{agent.specialty}</span></div>
-                      <p className="agent-description">{agent.description}</p>
-                      <ul className="agent-use-cases">
-                        {agent.useCases.map((uc, i) => (<li key={i}>{uc}</li>))}
-                      </ul>
-                      <div className="agent-stats">
-                        <div className="agent-stat">
-                          <CheckCircle size={13} color="var(--success)" />
-                          <span className="agent-stat-value">{agent.completedTasks}</span> tasks
-                        </div>
-                        <div className="agent-stat">
-                          <Star size={13} color="var(--warning)" />
-                          <span className="agent-stat-value">{agent.rating}</span> rating
-                        </div>
-                      </div>
-                      <div className="agent-action-row">
-                        <div className="agent-price">
-                          <Zap size={13} />
-                          <span className="agent-price-value">${agent.price.toFixed(2)}</span>
-                          <span style={{ fontWeight: 400, opacity: 0.6, fontSize: '0.75rem' }}>/ task</span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                          <span className={`agent-status-badge ${agent.status.toLowerCase()}`}>{agent.status}</span>
-                          <button className="btn btn-primary" style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}
-                            onClick={() => { setPage('tasks'); setShowForm(true); }}>Assign</button>
-                        </div>
+              <div className="agent-grid stagger">
+                {agents.map(agent => (
+                  <div key={agent.id} className={`card glass agent-card accent-${agent.accent}`}>
+                    <div className="agent-header">
+                      <div className={`agent-avatar ${agent.accent}`}>{iconMap[agent.icon] || <Cpu size={18} />}</div>
+                      <div className="agent-info">
+                        <div className="agent-name">{agent.name}</div>
+                        <div className="agent-model">{agent.model}</div>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div className="agent-tags"><span className={`agent-tag ${agent.accent}`}>{agent.specialty}</span></div>
+                    <p className="agent-description">{agent.description}</p>
+                  </div>
+                ))}
+              </div>
             </section>
           </>
         )}
       </div>
 
-      {/* ── Post Task Modal ──────────────────────────────── */}
+      {/* ── Modals ──────────────────────────────────────── */}
       {showForm && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div className="card glass modal-content" style={{ width: '100%', maxWidth: '480px', padding: '2rem' }}>
+        <div className="modal-overlay fade-in" onClick={() => setShowForm(false)}>
+          <div className="modal-card glass" onClick={e => e.stopPropagation()}>
             <h2 style={{ marginBottom: '1.5rem', fontSize: '1.3rem' }}>Post New Task</h2>
             <form onSubmit={handleSubmit}>
-              <label>Task Title</label>
-              <input placeholder="e.g. Analyze latest market trends for GLR" value={newTask.title}
-                onChange={e => setNewTask({ ...newTask, title: e.target.value })} />
-              <label>Description</label>
-              <textarea rows={4} placeholder="Detailed instructions for the AI agent..." value={newTask.description}
-                onChange={e => setNewTask({ ...newTask, description: e.target.value })} />
+              <label>Task Title *</label>
+              <input placeholder="e.g. Data Analysis" value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} required />
+              <label>Description *</label>
+              <textarea rows={4} placeholder="Describe the task details..." value={newTask.description} onChange={e => setNewTask({ ...newTask, description: e.target.value })} required />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div>
-                  <label>Reward (GLR)</label>
-                  <input type="number" value={newTask.reward}
-                    onChange={e => setNewTask({ ...newTask, reward: Number(e.target.value) })} />
-                </div>
-                <div>
-                  <label>Deadline</label>
-                  <input type="date" value={newTask.deadline}
-                    onChange={e => setNewTask({ ...newTask, deadline: e.target.value })} />
-                </div>
+                <div><label>Reward (GLR)</label><input type="number" value={newTask.reward} onChange={e => setNewTask({ ...newTask, reward: Number(e.target.value) })} /></div>
+                <div><label>Deadline</label><input type="date" value={newTask.deadline} onChange={e => setNewTask({ ...newTask, deadline: e.target.value })} /></div>
               </div>
-              <label>Assign Agent</label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                {agents.map(a => (
-                  <button key={a.id} type="button"
-                    className={`btn ${newTask.selectedAgent === a.id ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                    onClick={() => setNewTask({ ...newTask, selectedAgent: a.id })}>
-                    {iconMap[a.icon]} {a.name}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Submit to Orbit</button>
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Submit Task</button>
                 <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
               </div>
             </form>
           </div>
-        </div>
-      )}
-
-      {/* ── Register Agent Modal ──────────────────────────── */}
-      {showAgentForm && (
-        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div className="card glass modal-content" style={{ width: '100%', maxWidth: '520px', padding: '2rem', maxHeight: '90vh', overflowY: 'auto' }}>
-            <h2 style={{ marginBottom: '1.5rem', fontSize: '1.3rem' }}>Register Your Agent</h2>
-            <form onSubmit={handleRegisterAgent}>
-              <label>Agent Name *</label>
-              <input placeholder="e.g. My Custom Agent" value={newAgent.name}
-                onChange={e => setNewAgent({ ...newAgent, name: e.target.value })} required />
-
-              <label>Model</label>
-              <input placeholder="e.g. qwen/qwen-2.5-coder:free" value={newAgent.model}
-                onChange={e => setNewAgent({ ...newAgent, model: e.target.value })} />
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div>
-                  <label>Specialty</label>
-                  <input placeholder="e.g. Data Analysis" value={newAgent.specialty}
-                    onChange={e => setNewAgent({ ...newAgent, specialty: e.target.value })} />
-                </div>
-                <div>
-                  <label>Price ($/task)</label>
-                  <input type="number" step="0.01" value={newAgent.price}
-                    onChange={e => setNewAgent({ ...newAgent, price: Number(e.target.value) })} />
-                </div>
-              </div>
-
-              <label>Icon</label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                {iconOptions.map(opt => (
-                  <button key={opt.value} type="button"
-                    className={`btn ${newAgent.icon === opt.value ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ padding: '0.4rem 0.7rem', fontSize: '0.8rem' }}
-                    onClick={() => setNewAgent({ ...newAgent, icon: opt.value })}>
-                    {iconMap[opt.value]} {opt.label}
-                  </button>
-                ))}
-              </div>
-
-              <label>Description *</label>
-              <textarea rows={3} placeholder="Describe what your agent does..." value={newAgent.description}
-                onChange={e => setNewAgent({ ...newAgent, description: e.target.value })} required />
-
-              <label>Use Cases (one per line)</label>
-              <textarea rows={3} placeholder="Market research&#10;Data processing&#10;Content generation" value={newAgent.useCases}
-                onChange={e => setNewAgent({ ...newAgent, useCases: e.target.value })} />
-
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Register Agent</button>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowAgentForm(false)}>Cancel</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Cookie Consent Banner ────────────────────────── */}
-      {cookieConsent && (
-        <div className="cookie-banner fade-in-up">
-          <p>
-            We use cookies to enhance your experience. By continuing, you agree to our{' '}
-            <a href="#">Privacy Policy</a> and <a href="#">Terms of Service</a>.
-          </p>
-          <button className="btn btn-primary" onClick={() => setCookieConsent(false)}>Accept All</button>
-          <button className="btn btn-ghost" onClick={() => setCookieConsent(false)}>Decline</button>
         </div>
       )}
     </>

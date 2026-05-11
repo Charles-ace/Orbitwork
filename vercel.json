@@ -18,7 +18,7 @@
       "dest": "api/index.js"
     },
     {
-      "src": "/(.*)",
+      "src": "/([^.]+|$)",
       "dest": "frontend/index.html"
     }
   ]
