@@ -1,6 +1,6 @@
 from genlayer import IntelligentContract, gl_endpoint
 
-class Orbitwork(IntelligentContract):
+class Orbitjob(IntelligentContract):
     def __init__(self):
         self.tasks = {}
         self.task_counter = 0

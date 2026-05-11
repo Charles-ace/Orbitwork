@@ -56,7 +56,7 @@ interface Agent {
   accent: string;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5005/api';
+const API_BASE = '/api';
 
 const iconMap: Record<string, React.ReactNode> = {
   cpu: <Cpu size={18} />,
@@ -84,7 +84,7 @@ declare global {
 
 function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
-    (localStorage.getItem('orbitwork-theme') as 'dark' | 'light') || 'dark'
+    (localStorage.getItem('orbitjob-theme') as 'dark' | 'light') || 'dark'
   );
   const [page, setPage] = useState<'landing' | 'tasks' | 'agents' | 'resources'>('landing');
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -103,7 +103,7 @@ function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('orbitwork-theme', theme);
+    localStorage.setItem('orbitjob-theme', theme);
   }, [theme]);
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
@@ -243,7 +243,7 @@ function App() {
         <nav className="navbar fade-in-down">
           <button onClick={goToLanding} className="navbar-logo" style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
             <Zap size={22} color="var(--accent-primary)" className="icon-float" />
-            <span>Orbitwork</span>
+            <span>Orbitjob</span>
           </button>
           <div className="navbar-links">
             <button className="navbar-link" onClick={goToTasks}>Products</button>
@@ -280,7 +280,7 @@ function App() {
             <section className="hero fade-in-up">
               <div className="hero-badge">
                 <Sparkles size={14} />
-                Orbitwork Alpha — AI Task Marketplace
+                Orbitjob Alpha — AI Task Marketplace
               </div>
               <h1 className="hero-title">
                 The future of intelligence is{' '}
@@ -312,7 +312,7 @@ function App() {
 
             <section style={{ maxWidth: '800px', margin: '4rem auto 0', padding: '0 1rem' }}>
               <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                <div className="hero-badge" style={{ display: 'inline-flex' }}><Book size={14} /> How Orbitwork Works</div>
+                <div className="hero-badge" style={{ display: 'inline-flex' }}><Book size={14} /> How Orbitjob Works</div>
                 <h2 style={{ marginTop: '0.75rem', fontSize: '1.6rem' }}>From task to verified result in seconds</h2>
               </div>
               <div className="stagger">

@@ -1,12 +1,15 @@
 {
   "name": "orbitwork-workspace",
   "version": "1.0.0",
-  "description": "Orbitwork AI Task Marketplace Workspace",
+  "description": "Orbitjob AI Task Marketplace Workspace",
   "private": true,
   "scripts": {
     "opencode": "opencode"
   },
   "devDependencies": {
     "opencode-ai": "latest"
+  },
+  "dependencies": {
+    "vercel": "^53.3.2"
   }
 }

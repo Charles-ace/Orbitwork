@@ -86,7 +86,7 @@ let sessions = {};
 app.get('/api/auth/challenge', (req, res) => {
   const { address } = req.query;
   if (!address) return res.status(400).json({ error: 'Address required' });
-  const nonce = `Sign into Orbitwork on GenLayer\nAddress: ${address.toLowerCase()}\nNonce: ${Date.now()}`;
+  const nonce = `Sign into Orbitjob on GenLayer\nAddress: ${address.toLowerCase()}\nNonce: ${Date.now()}`;
   sessions[address.toLowerCase()] = { nonce, expiresAt: Date.now() + 60000 };
   res.json({ nonce, address });
 });
@@ -116,7 +116,7 @@ app.get('/api/auth/me', (req, res) => {
 
 // ── Health check ─────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.json({ status: 'Orbitwork backend running' });
+  res.json({ status: 'Orbitjob backend running' });
 });
 
 // ── Task Routes ──────────────────────────────────────────────
@@ -204,7 +204,7 @@ app.post('/api/tasks/:id/execute', async (req, res) => {
       throw new Error('OPENROUTER_API_KEY is not set. Add it to the root .env file.');
     }
 
-    const systemPrompt = `You are an AI agent executing tasks on the Orbitwork marketplace. Analyze the task and respond with valid JSON only (no markdown, no code fences):
+    const systemPrompt = `You are an AI agent executing tasks on the Orbitjob marketplace. Analyze the task and respond with valid JSON only (no markdown, no code fences):
 
 {
   "reasoning_trace": ["step 1 description", "step 2 description", ...],
@@ -237,7 +237,7 @@ The confidence score should reflect how well you believe you fulfilled the task.
           'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
           'Content-Type': 'application/json',
           'HTTP-Referer': 'http://localhost:5005',
-          'X-Title': 'Orbitwork'
+          'X-Title': 'Orbitjob'
         }
       }
     );
@@ -381,9 +381,11 @@ app.delete('/api/agents/:id', (req, res) => {
 // ── Start Server ─────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`\n  ⚡ Orbitwork Backend [Mock Onchain Mode]`);
+  console.log(`\n  ⚡ Orbitjob Backend [Mock Onchain Mode]`);
   console.log(`  → http://localhost:${PORT}`);
   console.log(`  → ${taskCache.length} tasks | ${agents.length} agents`);
   console.log(`  → Mock Bridge active — ${mockLedger.length} transactions logged`);
   console.log();
 });
+
+module.exports = app;

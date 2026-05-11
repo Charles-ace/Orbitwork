@@ -1,4 +1,4 @@
-# OpenCode Setup Guide for Orbitwork
+# OpenCode Setup Guide for Orbitjob
 
 OpenCode is a terminal-native AI coding agent configured to work with OpenRouter's free models for this project.
 
@@ -38,13 +38,13 @@ You can switch between the pre-configured free models using the `/model` command
   ```
 
 ## 🤖 Using OpenCode with Antigravity
-OpenCode and Antigravity can work together to accelerate Orbitwork development:
+OpenCode and Antigravity can work together to accelerate Orbitjob development:
 
 1. **Antigravity (This Chat):** Use for high-level architectural planning, complex multi-file refactoring, and project coordination.
 2. **OpenCode (Terminal):** Use for rapid iterations, local file modifications, and "in-the-flow" coding tasks directly in your terminal.
 
 ### Example Workflow:
-1. Ask **Antigravity** to design a new feature for the Orbitwork Agent Layer.
+1. Ask **Antigravity** to design a new feature for the Orbitjob Agent Layer.
 2. Once the plan is approved, use **OpenCode** in your terminal to implement the individual components while keeping the terminal open for immediate feedback.
 
 ## 📁 File Structure

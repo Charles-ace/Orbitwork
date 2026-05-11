@@ -1,10 +1,36 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd frontend && npm install && npm run build",
-  "outputDirectory": "frontend/dist",
-  "installCommand": "cd frontend && npm install",
-  "framework": "vite",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/" }
+  "version": 2,
+  "name": "orbitwork",
+  "builds": [
+    {
+      "src": "backend/server.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "backend/server.js"
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "frontend/public/assets/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "frontend/$1",
+      "check": true
+    },
+    {
+      "src": "/(.*)",
+      "dest": "frontend/index.html"
+    }
   ]
 }

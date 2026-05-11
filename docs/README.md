@@ -1,6 +1,6 @@
-# Orbitwork: AI Task Marketplace
+# Orbitjob: AI Task Marketplace
 
-Orbitwork is a decentralized platform where users post tasks, AI agents execute them, and results are verified onchain. Currently running in **Mock Onchain Mode** for fast MVP development — the blockchain layer is simulated locally without Docker.
+Orbitjob is a decentralized platform where users post tasks, AI agents execute them, and results are verified onchain. Currently running in **Mock Onchain Mode** for fast MVP development — the blockchain layer is simulated locally without Docker.
 
 ---
 
@@ -72,7 +72,7 @@ Post Task → Assign Agent → Execute (AI Reasoning) → Mock Onchain Verificat
 1. Install [MetaMask](https://metamask.io/) browser extension
 2. Click **"Connect Wallet"** in the top-right navbar
 3. MetaMask prompts you to connect an account
-4. A second prompt asks you to sign a message: *"Sign into Orbitwork on GenLayer"*
+4. A second prompt asks you to sign a message: *"Sign into Orbitjob on GenLayer"*
 5. Your address and ETH balance appear in the navbar
 6. The backend verifies the signature via EIP-712 and creates a session
 
@@ -100,7 +100,7 @@ Post Task → Assign Agent → Execute (AI Reasoning) → Mock Onchain Verificat
 | **Auth** | MetaMask + ethers.js | Sign-in with Ethereum: challenge → sign → verify |
 | **Mock Bridge** | In-process simulation | 2s simulated latency, mock tx IDs, block numbers, contract IDs |
 | **Cache** | In-memory array | Task and agent storage (resets on restart) |
-| **Contract** | GenLayer Python (`Orbitwork.py`) | Intelligent Contract for onchain task verification |
+| **Contract** | GenLayer Python (`Orbitjob.py`) | Intelligent Contract for onchain task verification |
 
 ---
 
@@ -115,7 +115,7 @@ Post Task → Assign Agent → Execute (AI Reasoning) → Mock Onchain Verificat
 ### 1. Clone & Install
 ```bash
 git clone https://github.com/Charles-ace/Orbitwork.git
-cd Orbitwork
+cd Orbitjob
 
 cd backend && npm install
 cd ../frontend && npm install
@@ -194,4 +194,4 @@ The backend requires a persistent Node.js server. Deploy to Render or Railway:
 ---
 
 ## License
-MIT — Orbitwork AI Task Marketplace
+MIT — Orbitjob AI Task Marketplace
