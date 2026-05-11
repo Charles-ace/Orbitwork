@@ -1,9 +1,0 @@
-{
-  "name": "api",
-  "private": true,
-  "dependencies": {
-    "uuid": "^14.0.0",
-    "axios": "^1.16.0",
-    "ethers": "^6.16.0"
-  }
-}
