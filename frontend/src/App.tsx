@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon, Star,
+  Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon,
   CheckCircle, BarChart3, Code, PenLine, Shield, Cpu, Sparkles, Rocket, Users,
-  Trash2, X, Book, GitFork
+  X, Book, GitFork
 } from 'lucide-react';
 
 // Custom premium icons from public assets
@@ -78,10 +78,6 @@ function App() {
   const [showForm, setShowForm] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [newTask, setNewTask] = useState({ title: '', description: '', reward: 0, deadline: '', selectedAgent: '' });
-  const [newAgent, setNewAgent] = useState({
-    name: '', model: 'qwen/qwen-2.5-coder:free', specialty: '',
-    icon: 'cpu', price: 0, description: '', useCases: '',
-  });
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -351,7 +347,7 @@ function App() {
                 <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 0 }}>
                   <Bot size={22} /> Listed Agents
                 </h2>
-                <button className="btn btn-primary" onClick={() => setShowAgentForm(true)}>
+                <button className="btn btn-primary" onClick={() => {}}>
                   <Plus size={17} /> Register Agent
                 </button>
               </div>
