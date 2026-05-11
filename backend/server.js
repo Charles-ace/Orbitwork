@@ -65,7 +65,37 @@ async function mockGetTaskCount() {
 }
 
 // ── Task Cache ───────────────────────────────────────────────
-let taskCache = [];
+let taskCache = [
+  {
+    id: 'seed-1',
+    title: 'Analyze Orbitjob Market Fit',
+    description: 'Provide a detailed report on how Orbitjob compares to traditional freelancer platforms like Upwork.',
+    status: 'COMPLETED',
+    reward: 150,
+    createdAt: new Date(Date.now() - 86400000).toISOString(),
+    executionTrace: { agent: 'Antigravity Alpha', plan: ['Search competitors', 'Analyze fee structures', 'Summarize USPs'], startedAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 86300000).toISOString(), steps: [] },
+    verificationStatus: 'VERIFIED',
+    result: { summary: 'Orbitjob offers 90% lower fees via GenLayer consensus.', data: {} },
+    confidenceScore: 0.95,
+    assignedAgent: 'agent-alpha',
+    txId: '0x7d...a1f',
+    blockNumber: 42069,
+    contractTaskId: 1
+  },
+  {
+    id: 'seed-2',
+    title: 'Smart Contract Security Audit',
+    description: 'Review the Orbitjob intelligent contract for potential reentrancy or logic flaws.',
+    status: 'PENDING',
+    reward: 500,
+    createdAt: new Date().toISOString(),
+    executionTrace: null,
+    verificationStatus: 'NOT_VERIFIED',
+    result: null,
+    confidenceScore: 0,
+    assignedAgent: 'agent-epsilon'
+  }
+];
 
 const accentColors = ['purple', 'blue', 'green', 'orange', 'red', 'cyan'];
 const iconMap = { cpu: 'cpu', barChart: 'barChart', code: 'code', penLine: 'penLine', shield: 'shield', search: 'search' };
@@ -108,33 +138,36 @@ app.post('/api/auth/signin', (req, res) => {
   res.json({ token, address: address.toLowerCase(), message: 'Signed in successfully' });
 });
 
-app.get('/api/auth/me', (req, res) => {
+// Helper to handle routes with or without /api prefix
+const apiRoute = (path) => [`/api${path}`, path];
+
+app.get(apiRoute('/auth/me'), (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token || !sessions[token]) return res.status(401).json({ error: 'Not authenticated' });
   res.json({ address: sessions[token].address });
 });
 
 // ── Health check ─────────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({ status: 'Orbitjob backend running' });
+app.get(apiRoute('/'), (req, res) => {
+  res.json({ status: 'Orbitjob backend running', seed: true });
 });
 
 // ── Task Routes ──────────────────────────────────────────────
 
 // List all tasks
-app.get('/api/tasks', async (req, res) => {
+app.get(apiRoute('/tasks'), async (req, res) => {
   res.json(taskCache);
 });
 
 // Get single task
-app.get('/api/tasks/:id', (req, res) => {
+app.get(apiRoute('/tasks/:id'), (req, res) => {
   const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
 });
 
 // Create a task
-app.post('/api/tasks', async (req, res) => {
+app.post(apiRoute('/tasks'), async (req, res) => {
   const { title, description, constraints, reward, deadline, assignedAgent } = req.body;
 
   if (!title || !description) {
