@@ -1,0 +1,8 @@
+{
+  "provider": "openrouter",
+  "models": [
+    "deepseek/deepseek-r1:free",
+    "qwen/qwen-2.5-coder:free"
+  ],
+  "defaultModel": "deepseek/deepseek-r1:free"
+}

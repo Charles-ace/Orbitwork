@@ -1,0 +1,138 @@
+[
+  {
+    "id": "agent-alpha",
+    "name": "Antigravity Alpha",
+    "model": "qwen/qwen-2.5-coder:free",
+    "specialty": "General Purpose",
+    "icon": "cpu",
+    "price": 0.05,
+    "description": "Versatile AI agent capable of handling a wide range of tasks from research to content generation.",
+    "useCases": [
+      "Market research & trend analysis",
+      "General data processing",
+      "Document summarization",
+      "Multi-domain Q&A"
+    ],
+    "rating": 4.8,
+    "completedTasks": 142,
+    "status": "IDLE",
+    "accent": "purple",
+    "skills": [
+      "web-research",
+      "content-gen"
+    ]
+  },
+  {
+    "id": "agent-beta",
+    "name": "DataForge Beta",
+    "model": "gpt-4-turbo",
+    "specialty": "Data Analysis",
+    "icon": "barChart",
+    "price": 0.08,
+    "description": "Specialized in structured data analysis, statistical modeling, and visualization recommendations.",
+    "useCases": [
+      "Dataset analysis & visualization",
+      "Statistical modeling",
+      "Financial report generation",
+      "Trend forecasting"
+    ],
+    "rating": 4.9,
+    "completedTasks": 89,
+    "status": "IDLE",
+    "accent": "blue",
+    "skills": [
+      "data-analysis",
+      "content-gen"
+    ]
+  },
+  {
+    "id": "agent-gamma",
+    "name": "CodeWeaver Gamma",
+    "model": "gpt-4-turbo",
+    "specialty": "Code Generation",
+    "icon": "code",
+    "price": 0.1,
+    "description": "Expert-level code generation and review agent supporting multiple languages and frameworks.",
+    "useCases": [
+      "Code generation & review",
+      "Bug fixing & debugging",
+      "Test writing",
+      "Architecture & refactoring advice"
+    ],
+    "rating": 4.7,
+    "completedTasks": 214,
+    "status": "BUSY",
+    "accent": "green",
+    "skills": [
+      "code-analysis"
+    ]
+  },
+  {
+    "id": "agent-delta",
+    "name": "Synthia Delta",
+    "model": "gpt-4-turbo",
+    "specialty": "Content Creation",
+    "icon": "penLine",
+    "price": 0.06,
+    "description": "Creative writing specialist with a flair for compelling narratives and marketing copy.",
+    "useCases": [
+      "Copywriting & marketing content",
+      "Blog posts & articles",
+      "Social media content",
+      "Brand voice development"
+    ],
+    "rating": 4.6,
+    "completedTasks": 176,
+    "status": "IDLE",
+    "accent": "orange",
+    "skills": [
+      "content-gen"
+    ]
+  },
+  {
+    "id": "agent-epsilon",
+    "name": "Sentinel Epsilon",
+    "model": "gpt-4-turbo",
+    "specialty": "Security Audit",
+    "icon": "shield",
+    "price": 0.12,
+    "description": "Security-focused agent trained on OWASP top 10, CVE databases, and secure coding practices.",
+    "useCases": [
+      "Smart contract security review",
+      "Code vulnerability scanning",
+      "Compliance checklist generation",
+      "Threat modeling"
+    ],
+    "rating": 4.9,
+    "completedTasks": 63,
+    "status": "IDLE",
+    "accent": "red",
+    "skills": [
+      "code-analysis",
+      "security-audit"
+    ]
+  },
+  {
+    "id": "agent-zeta",
+    "name": "Nexus Zeta",
+    "model": "gpt-4-turbo",
+    "specialty": "Deep Research",
+    "icon": "search",
+    "price": 0.07,
+    "description": "Deep research agent with advanced reasoning capabilities for synthesizing complex information.",
+    "useCases": [
+      "Competitive analysis",
+      "Academic literature review",
+      "Technical deep dives",
+      "Feasibility studies"
+    ],
+    "rating": 4.8,
+    "completedTasks": 98,
+    "status": "IDLE",
+    "accent": "cyan",
+    "skills": [
+      "web-research",
+      "data-analysis"
+    ]
+  }
+]

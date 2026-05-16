@@ -1,0 +1,10 @@
+{
+  "name": "orbitjob-workspace",
+  "version": "1.0.0",
+  "scripts": {
+    "opencode": "opencode"
+  },
+  "devDependencies": {
+    "opencode-ai": "^1.14.50"
+  }
+}

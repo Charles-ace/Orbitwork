@@ -1,16 +1,46 @@
-// Mock Onchain Deploy
-// This script simulates deployment for MVP development.
-// Replace with real genlayer-js deploy when targeting GenLayer Testnet.
+import { readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-export default async function main() {
-  const mockAddress = `0x${Array(40).fill(0).map(() => Math.floor(Math.random() * 16).toString(16)).join('')}`;
-  const mockTxId = `tx_mock_deploy_${Date.now()}`;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-  console.log(`\n  ⚡ Orbitjob [Mock Onchain Mode]`);
-  console.log(`  → Simulated contract deployment`);
-  console.log(`  → Contract address: ${mockAddress}`);
-  console.log(`  → Deployment TX:    ${mockTxId}`);
-  console.log(`  → Set GENLAYER_CONTRACT_ADDRESS=${mockAddress} in .env to connect (optional in Mock Mode)\n`);
+export default async function main(client) {
+  const contractPath = path.resolve(__dirname, '..', 'contracts', 'Orbitjob.py');
+  const contractCode = new Uint8Array(readFileSync(contractPath));
 
-  return mockAddress;
+  console.log('\n  ⚡ Deploying Orbitjob contract...');
+  console.log(`  → Contract: ${contractPath}`);
+
+  await client.initializeConsensusSmartContract();
+
+  const deployTransaction = await client.deployContract({
+    code: contractCode,
+    args: [],
+  });
+
+  console.log(`  → Deployment TX: ${deployTransaction}`);
+  console.log('  → Waiting for finalization...');
+
+  const receipt = await client.waitForTransactionReceipt({
+    hash: deployTransaction,
+    retries: 200,
+  });
+
+  if (
+    receipt.statusName !== 'ACCEPTED' &&
+    receipt.statusName !== 'FINALIZED'
+  ) {
+    throw new Error(`Deployment failed: ${JSON.stringify(receipt)}`);
+  }
+
+  const isTestnet = client.chain?.id === 61123n;
+  const contractAddress = isTestnet
+    ? receipt.txDataDecoded?.contractAddress
+    : receipt.data?.contract_address;
+
+  console.log(`  → Contract deployed at: ${contractAddress}`);
+  console.log(`  → Add to .env: GENLAYER_CONTRACT_ADDRESS=${contractAddress}`);
+  console.log('  → Set GENLAYER_MODE=real to activate\n');
+
+  return contractAddress;
 }

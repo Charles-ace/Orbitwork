@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { ethers } from 'ethers';
 import {
   Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon,
   CheckCircle, BarChart3, Code, PenLine, Shield, Cpu, Sparkles, Rocket, Users,
-  X, Book, GitFork
+  X, Book, GitFork, Wallet, Menu
 } from 'lucide-react';
 
 // Custom premium icons from public assets
@@ -42,6 +43,12 @@ interface Task {
   contractTaskId?: number;
 }
 
+interface Skill {
+  id: string;
+  label: string;
+  description: string;
+}
+
 interface Agent {
   id: string;
   name: string;
@@ -55,6 +62,7 @@ interface Agent {
   completedTasks: number;
   status: 'IDLE' | 'BUSY';
   accent: string;
+  skills: string[];
 }
 
 const API_BASE = '/api';
@@ -72,12 +80,18 @@ function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     (localStorage.getItem('orbitjob-theme') as 'dark' | 'light') || 'dark'
   );
-  const [page, setPage] = useState<'landing' | 'tasks' | 'agents' | 'resources'>('landing');
+  const [page, setPage] = useState<'landing' | 'tasks' | 'agents' | 'register-agent' | 'resources'>('landing');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [wallet, setWallet] = useState<{ address: string; balance: string } | null>(null);
+  const [connecting, setConnecting] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [newTask, setNewTask] = useState({ title: '', description: '', reward: 0, deadline: '', selectedAgent: '' });
+  const [newAgent, setNewAgent] = useState({ name: '', model: '', specialty: '', description: '', icon: 'cpu', accent: 'purple', selectedSkills: [] as string[] });
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -100,10 +114,18 @@ function App() {
     } catch (err) { console.error('Failed to fetch agents', err); }
   }, []);
 
+  const fetchSkills = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/skills`);
+      setSkills(res.data);
+    } catch (err) { console.error('Failed to fetch skills', err); }
+  }, []);
+
   useEffect(() => {
     fetchTasks();
     fetchAgents();
-  }, [fetchTasks, fetchAgents]);
+    fetchSkills();
+  }, [fetchTasks, fetchAgents, fetchSkills]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -140,9 +162,52 @@ function App() {
     } catch (err) { console.error('Failed to execute task', err); }
   };
 
-  const goToTasks = () => { setPage('tasks'); setSelectedTask(null); };
-  const goToAgents = () => { setPage('agents'); setSelectedTask(null); };
-  const goToLanding = () => { setPage('landing'); setSelectedTask(null); };
+  const connectWallet = async () => {
+    if (!window.ethereum) {
+      alert('Please install MetaMask to connect.');
+      return;
+    }
+    setConnecting(true);
+    try {
+      const provider = new ethers.providers.Web3Provider(window.ethereum as any);
+      await provider.send('eth_requestAccounts', []);
+      const signer = provider.getSigner();
+      const address = await signer.getAddress();
+      const balance = ethers.utils.formatEther(await provider.getBalance(address));
+
+      const challengeRes = await axios.get(`${API_BASE}/auth/challenge`, { params: { address } });
+      const { nonce } = challengeRes.data;
+      const signature = await signer.signMessage(nonce);
+      const signinRes = await axios.post(`${API_BASE}/auth/signin`, { address, signature });
+      const { token } = signinRes.data;
+
+      setAuthToken(token);
+      setWallet({ address, balance });
+    } catch (err) {
+      console.error('Wallet connection failed:', err);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const disconnectWallet = () => {
+    setAuthToken(null);
+    setWallet(null);
+  };
+
+  const registerAgent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await axios.post(`${API_BASE}/agents`, newAgent);
+      setAgents(prev => [...prev, res.data]);
+      setNewAgent({ name: '', model: '', specialty: '', description: '', icon: 'cpu', accent: 'purple', selectedSkills: [] });
+    } catch (err) { console.error('Failed to register agent', err); }
+  };
+
+  const closeMobile = () => setMobileMenuOpen(false);
+  const goToTasks = () => { setPage('tasks'); setSelectedTask(null); closeMobile(); };
+  const goToAgents = () => { setPage('agents'); setSelectedTask(null); closeMobile(); };
+  const goToLanding = () => { setPage('landing'); setSelectedTask(null); closeMobile(); };
 
   return (
     <>
@@ -153,19 +218,38 @@ function App() {
             <Zap size={22} color="var(--accent-primary)" className="icon-float" />
             <span>Orbitjob</span>
           </button>
-          <div className="navbar-links">
-            <button className="navbar-link" onClick={goToTasks}>Products</button>
-            <button className="navbar-link" onClick={goToAgents}>Solutions</button>
-            <button className="navbar-link" onClick={() => { setPage('resources'); setSelectedTask(null); }}>Resources</button>
+          <div className={`navbar-links${mobileMenuOpen ? ' open' : ''}`}>
+            <button className="navbar-link" onClick={goToTasks}>PRODUCTS</button>
+            <button className="navbar-link" onClick={goToAgents}>AGENTS</button>
+            <button className="navbar-link" onClick={() => { setPage('resources'); setSelectedTask(null); closeMobile(); }}>RESOURCES</button>
           </div>
+          <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(v => !v)}>
+            {mobileMenuOpen ? <X size={17} /> : <Menu size={17} />}
+          </button>
           <div className="navbar-actions">
             <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>
-            <button className="btn btn-ghost" onClick={() => { goToTasks(); setShowForm(true); }}>
-              <Plus size={17} /> Post Task
-            </button>
-            <button className="btn btn-primary">Sign Up</button>
+            {page === 'tasks' && (
+              <button className="btn btn-ghost" onClick={() => { goToTasks(); setShowForm(true); }}>
+                <Plus size={17} /> Post Task
+              </button>
+            )}
+            {wallet ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: authToken ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)', display: 'inline-block' }} />
+                  {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
+                </span>
+                <button className="btn btn-ghost" onClick={disconnectWallet}>
+                  <Wallet size={17} /> Disconnect
+                </button>
+              </div>
+            ) : (
+              <button className="btn btn-primary" onClick={connectWallet} disabled={connecting}>
+                <Wallet size={17} /> {connecting ? 'Connecting...' : 'Connect Wallet'}
+              </button>
+            )}
           </div>
         </nav>
 
@@ -225,10 +309,43 @@ function App() {
                 </div>
               </div>
             </section>
+
+            <section className="stats-row fade-in-up">
+              <div className="stat-item">
+                <div className="stat-number">{agents.length}+</div>
+                <div className="stat-label">AI Agents</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-number">{tasks.filter(t => t.status === 'COMPLETED').length}+</div>
+                <div className="stat-label">Tasks Completed</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-number">2s</div>
+                <div className="stat-label">Avg. Verification</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-number">90%</div>
+                <div className="stat-label">Lower Fees</div>
+              </div>
+            </section>
+
+            <section className="cta-section fade-in-up">
+              <h2 style={{ marginBottom: '1rem' }}>Ready to Deploy Intelligent Agents?</h2>
+              <p style={{ marginBottom: '2rem', maxWidth: '500px', margin: '0 auto 2rem' }}>
+                Post a task, assign an AI agent, and get onchain-verified results in seconds.
+              </p>
+              <div className="hero-actions" style={{ justifyContent: 'center' }}>
+                <button className="btn btn-green" onClick={() => { goToTasks(); setShowForm(true); }}>
+                  <Rocket size={18} /> Get Started
+                </button>
+                <button className="btn btn-ghost" onClick={goToAgents}>
+                  <Bot size={18} /> Browse Agents
+                </button>
+              </div>
+            </section>
           </>
         )}
 
-        {/* ── Resources Page ────────────────────────────── */}
         {page === 'resources' && (
           <section className="fade-in-up" style={{ maxWidth: '600px', margin: '0 auto', textAlign: 'center' }}>
             <div className="hero-badge" style={{ marginBottom: '1rem', display: 'inline-flex' }}>
@@ -250,7 +367,7 @@ function App() {
               <button className="nav-tab active" onClick={goToTasks}><Target size={16} /> Tasks</button>
               <button className="nav-tab" onClick={goToAgents}><Bot size={16} /> Agents</button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: selectedTask ? '1fr 1.5fr' : '1fr', gap: '2rem' }}>
+            <div className="task-layout" style={{ display: 'grid', gridTemplateColumns: selectedTask ? '1fr 1.5fr' : '1fr', gap: '2rem' }}>
               <section>
                 <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Target size={22} /> Available Tasks</h2>
                 {tasks.length === 0 ? (
@@ -347,7 +464,7 @@ function App() {
                 <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 0 }}>
                   <Bot size={22} /> Listed Agents
                 </h2>
-                <button className="btn btn-primary" onClick={() => {}}>
+                <button className="btn btn-primary" onClick={() => setPage('register-agent')}>
                   <Plus size={17} /> Register Agent
                 </button>
               </div>
@@ -361,7 +478,22 @@ function App() {
                         <div className="agent-model">{agent.model}</div>
                       </div>
                     </div>
-                    <div className="agent-tags"><span className={`agent-tag ${agent.accent}`}>{agent.specialty}</span></div>
+                    <div className="agent-tags">
+                      <span className={`agent-tag ${agent.accent}`}>{agent.specialty}</span>
+                      {agent.skills?.map(skillId => {
+                        const skill = skills.find(s => s.id === skillId);
+                        return skill ? (
+                          <span key={skillId} className={`agent-tag ${agent.accent}`} title={skill.description}>{skill.label}</span>
+                        ) : null;
+                      })}
+                    </div>
+                    {agent.skills && agent.skills.length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.75rem', fontSize: '0.75rem', color: 'var(--accent-primary)' }}>
+                        <Zap size={13} fill="var(--accent-primary)" />
+                        <span style={{ fontWeight: 600 }}>Expert Skills Active</span>
+                        <span style={{ opacity: 0.6 }}>({agent.skills.length})</span>
+                      </div>
+                    )}
                     <p className="agent-description">{agent.description}</p>
                   </div>
                 ))}
@@ -371,7 +503,54 @@ function App() {
         )}
       </div>
 
-      {/* ── Modals ──────────────────────────────────────── */}
+      {/* ── Register Agent Page ─────────────────────────── */}
+      {page === 'register-agent' && (
+        <>
+          <div className="nav-tabs">
+            <button className="nav-tab" onClick={goToTasks}><Target size={16} /> Tasks</button>
+            <button className="nav-tab" onClick={goToAgents}><Bot size={16} /> Agents</button>
+            <button className="nav-tab active" onClick={() => {}}><Plus size={16} /> Register Agent</button>
+          </div>
+          <section style={{ maxWidth: '520px', margin: '0 auto' }}>
+            <h2 style={{ marginBottom: '1.5rem' }}>Register New Agent</h2>
+            <div className="card glass" style={{ padding: '2rem' }}>
+              <form onSubmit={registerAgent}>
+                <label>Agent Name *</label>
+                <input placeholder="e.g. Nova AI" value={newAgent.name} onChange={e => setNewAgent({ ...newAgent, name: e.target.value })} required />
+                <label>Model ID *</label>
+                <input placeholder="e.g. gpt-4-turbo" value={newAgent.model} onChange={e => setNewAgent({ ...newAgent, model: e.target.value })} required />
+                <label>Specialty</label>
+                <input placeholder="e.g. Data Analysis" value={newAgent.specialty} onChange={e => setNewAgent({ ...newAgent, specialty: e.target.value })} />
+                <label>Description</label>
+                <textarea rows={3} placeholder="Describe what this agent does..." value={newAgent.description} onChange={e => setNewAgent({ ...newAgent, description: e.target.value })} />
+                <label style={{ marginTop: '1rem' }}>Expert Skills</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  {skills.map(s => (
+                    <label key={s.id} className={`skill-chip ${newAgent.selectedSkills.includes(s.id) ? 'active' : ''}`}
+                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.7rem', borderRadius: '6px', fontSize: '0.78rem', border: '1px solid var(--border-color)', background: newAgent.selectedSkills.includes(s.id) ? 'var(--accent-primary)' : 'var(--card-bg)', color: newAgent.selectedSkills.includes(s.id) ? '#000' : 'var(--text-secondary)', transition: 'all 0.2s', fontWeight: 500 }}>
+                      <input type="checkbox" checked={newAgent.selectedSkills.includes(s.id)}
+                        onChange={e => setNewAgent({
+                          ...newAgent,
+                          selectedSkills: e.target.checked
+                            ? [...newAgent.selectedSkills, s.id]
+                            : newAgent.selectedSkills.filter(id => id !== s.id)
+                        })}
+                        style={{ display: 'none' }} />
+                      {s.label}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+                  <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Register</button>
+                  <button type="button" className="btn btn-ghost" onClick={goToAgents}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </>
+      )}
+
+      {/* ── Post Task Modal ──────────────────────────────── */}
       {showForm && (
         <div className="modal-overlay fade-in" onClick={() => setShowForm(false)}>
           <div className="modal-card glass" onClick={e => e.stopPropagation()}>
@@ -385,6 +564,14 @@ function App() {
                 <div><label>Reward (GLR)</label><input type="number" value={newTask.reward} onChange={e => setNewTask({ ...newTask, reward: Number(e.target.value) })} /></div>
                 <div><label>Deadline</label><input type="date" value={newTask.deadline} onChange={e => setNewTask({ ...newTask, deadline: e.target.value })} /></div>
               </div>
+              <label style={{ marginTop: '0.5rem' }}>Assign Agent</label>
+              <select value={newTask.selectedAgent} onChange={e => setNewTask({ ...newTask, selectedAgent: e.target.value })}
+                style={{ width: '100%', padding: '0.65rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--text-primary)', fontSize: '0.9rem', fontFamily: 'inherit' }}>
+                <option value="">Auto-assign (first available)</option>
+                {agents.map(a => (
+                  <option key={a.id} value={a.id}>{a.name} — {a.specialty}</option>
+                ))}
+              </select>
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Submit Task</button>
                 <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>

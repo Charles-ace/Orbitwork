@@ -1,20 +1,98 @@
-const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
+const { ethers } = require('ethers');
+const db = require('./db');
 
-dotenv.config();
-dotenv.config({ path: '../.env', override: true });
+// ── Skills Loader (cache at init) ──
+const SKILLS_FILE = path.join(__dirname, '..', 'docs', 'expert-skills.md');
 
-const app = express();
-const PORT = process.env.PORT || 5005;
+function loadSkillsFromFile() {
+  try {
+    if (fs.existsSync(SKILLS_FILE)) {
+      const raw = fs.readFileSync(SKILLS_FILE, 'utf-8');
+      const skills = [];
+      const skillBlocks = raw.match(/### Skill: .*?(?=### Skill:|$)/gs) || [];
+      for (const block of skillBlocks) {
+        const idMatch = block.match(/### Skill:\s*(\S+)/);
+        const labelMatch = block.match(/\*\*Label\*\*:\s*(.+)/);
+        const descMatch = block.match(/\*\*Description\*\*:\s*(.+)/);
+        const directiveMatch = block.match(/\*\*Prompt Directive\*\*:\s*(.+)/);
+        if (idMatch) {
+          skills.push({
+            id: idMatch[1].trim(),
+            label: labelMatch ? labelMatch[1].trim() : idMatch[1].trim(),
+            description: descMatch ? descMatch[1].trim() : '',
+            promptDirective: directiveMatch ? directiveMatch[1].trim() : '',
+          });
+        }
+      }
+      return { raw, skills };
+    }
+  } catch (e) {
+    console.error('Failed to load skills file:', e.message);
+  }
+  return { raw: '', skills: [] };
+}
 
-app.use(cors());
-app.use(express.json());
+let skillsCache = null;
+function getSkills() {
+  if (!skillsCache) skillsCache = loadSkillsFromFile();
+  return skillsCache;
+}
 
-// ── Mock Data ────────────────────────────────────────────────
-let taskCache = [
+// ── Mock Onchain Bridge ──
+let mockContractId = 0;
+const mockLedger = [];
+
+function simLatency(ms = 2000) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function mockTx(type, data) {
+  const tx = {
+    txId: `tx_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    data,
+    blockTimestamp: new Date().toISOString(),
+    blockNumber: Math.floor(Math.random() * 999999) + 1,
+  };
+  mockLedger.push(tx);
+  return tx;
+}
+
+async function mockPostTask(title, description, reward, constraints, deadline) {
+  await simLatency();
+  mockContractId++;
+  const receipt = {
+    txId: `tx_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    contractId: mockContractId,
+    status: 'FINALIZED',
+    blockNumber: Math.floor(Math.random() * 999999) + 1,
+  };
+  mockTx('post_task', { contractId: mockContractId, title, description, reward, constraints, deadline });
+  return receipt;
+}
+
+async function mockSubmitExecution(contractTaskId, output, reasoning, confidence, agentId) {
+  await simLatency();
+  const receipt = {
+    txId: `tx_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    status: 'FINALIZED',
+    verificationStatus: 'VERIFIED',
+    blockNumber: Math.floor(Math.random() * 999999) + 1,
+  };
+  mockTx('submit_execution', { contractTaskId, output, reasoning, confidence, agentId, verdict: 'VERIFIED' });
+  return receipt;
+}
+
+async function mockGetTaskCount() {
+  return mockContractId;
+}
+
+// ── Seed Data ──
+const seedTasks = [
   {
     id: 'seed-1',
     title: 'Analyze Orbitjob Market Fit',
@@ -46,85 +124,356 @@ let taskCache = [
   }
 ];
 
-let agents = [
-  { id: 'agent-alpha', name: 'Antigravity Alpha', model: 'qwen/qwen-2.5-coder:free', specialty: 'General Purpose', icon: 'cpu', price: 0.05, description: 'Versatile AI agent for research and content generation.', useCases: ['Market research', 'Summarization'], rating: 4.8, completedTasks: 142, status: 'IDLE', accent: 'purple' },
-  { id: 'agent-epsilon', name: 'Sentinel Epsilon', model: 'gpt-4-turbo', specialty: 'Security Audit', icon: 'shield', price: 0.12, description: 'Security-focused agent for code review.', useCases: ['Contract audit', 'Vulnerability scanning'], rating: 4.9, completedTasks: 63, status: 'IDLE', accent: 'red' }
+const seedAgents = [
+  { id: 'agent-alpha', name: 'Antigravity Alpha', model: 'qwen/qwen-2.5-coder:free', specialty: 'General Purpose', icon: 'cpu', price: 0.05, description: 'Versatile AI agent capable of handling a wide range of tasks from research to content generation.', useCases: ['Market research & trend analysis', 'General data processing', 'Document summarization', 'Multi-domain Q&A'], rating: 4.8, completedTasks: 142, status: 'IDLE', accent: 'purple', skills: ['web-research', 'content-gen'] },
+  { id: 'agent-beta', name: 'DataForge Beta', model: 'gpt-4-turbo', specialty: 'Data Analysis', icon: 'barChart', price: 0.08, description: 'Specialized in structured data analysis, statistical modeling, and visualization recommendations.', useCases: ['Dataset analysis & visualization', 'Statistical modeling', 'Financial report generation', 'Trend forecasting'], rating: 4.9, completedTasks: 89, status: 'IDLE', accent: 'blue', skills: ['data-analysis', 'content-gen'] },
+  { id: 'agent-gamma', name: 'CodeWeaver Gamma', model: 'gpt-4-turbo', specialty: 'Code Generation', icon: 'code', price: 0.10, description: 'Expert-level code generation and review agent supporting multiple languages and frameworks.', useCases: ['Code generation & review', 'Bug fixing & debugging', 'Test writing', 'Architecture & refactoring advice'], rating: 4.7, completedTasks: 214, status: 'BUSY', accent: 'green', skills: ['code-analysis'] },
+  { id: 'agent-delta', name: 'Synthia Delta', model: 'gpt-4-turbo', specialty: 'Content Creation', icon: 'penLine', price: 0.06, description: 'Creative writing specialist with a flair for compelling narratives and marketing copy.', useCases: ['Copywriting & marketing content', 'Blog posts & articles', 'Social media content', 'Brand voice development'], rating: 4.6, completedTasks: 176, status: 'IDLE', accent: 'orange', skills: ['content-gen'] },
+  { id: 'agent-epsilon', name: 'Sentinel Epsilon', model: 'gpt-4-turbo', specialty: 'Security Audit', icon: 'shield', price: 0.12, description: 'Security-focused agent trained on OWASP top 10, CVE databases, and secure coding practices.', useCases: ['Smart contract security review', 'Code vulnerability scanning', 'Compliance checklist generation', 'Threat modeling'], rating: 4.9, completedTasks: 63, status: 'IDLE', accent: 'red', skills: ['code-analysis', 'security-audit'] },
+  { id: 'agent-zeta', name: 'Nexus Zeta', model: 'gpt-4-turbo', specialty: 'Deep Research', icon: 'search', price: 0.07, description: 'Deep research agent with advanced reasoning capabilities for synthesizing complex information.', useCases: ['Competitive analysis', 'Academic literature review', 'Technical deep dives', 'Feasibility studies'], rating: 4.8, completedTasks: 98, status: 'IDLE', accent: 'cyan', skills: ['web-research', 'data-analysis'] }
 ];
 
-// ── Helper ───────────────────────────────────────────────────
-const apiRoute = (path) => [`/api${path}`, path];
+// ── Persistent Storage ──
+let taskCache = db.loadTasks(seedTasks);
+let agents = db.loadAgents(seedAgents);
 
-// ── Routes ────────────────────────────────────────────────────
-app.get(apiRoute('/'), (req, res) => {
-  res.json({ status: 'Orbitjob backend running', mode: 'stable' });
+// ── Auth Sessions ──
+let sessions = {};
+
+// ── Helpers ──
+const accentColors = ['purple', 'blue', 'green', 'orange', 'red', 'cyan'];
+
+const send = (res, status, data) => {
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+  });
+  res.end(JSON.stringify(data));
+};
+
+const parseBody = (req) => new Promise((resolve) => {
+  let body = '';
+  req.on('data', (chunk) => { body += chunk; });
+  req.on('end', () => {
+    try { resolve(JSON.parse(body || '{}')); }
+    catch { resolve({}); }
+  });
 });
 
-app.get(apiRoute('/tasks'), (req, res) => {
-  res.json(taskCache);
-});
+const matchPath = (url) => {
+  const p = new URL(url, 'http://localhost').pathname;
+  const apiMatch = p.match(/^\/api(?:\/(.*))?$/);
+  const base = apiMatch ? apiMatch[1] : p.slice(1);
+  return { base, isApi: !!apiMatch };
+};
 
-app.get(apiRoute('/tasks/:id'), (req, res) => {
-  const task = taskCache.find(t => t.id === req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  res.json(task);
-});
+// ── Handler ──
+module.exports = async (req, res) => {
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    });
+    return res.end();
+  }
 
-app.post(apiRoute('/tasks'), (req, res) => {
-  const { title, description, reward } = req.body;
-  const newTask = {
-    id: uuidv4(),
-    title,
-    description,
-    status: 'PENDING',
-    reward: reward || 0,
-    createdAt: new Date().toISOString(),
-    executionTrace: null,
-    verificationStatus: 'NOT_VERIFIED',
-    result: null
-  };
-  taskCache.push(newTask);
-  res.json(newTask);
-});
-
-app.get(apiRoute('/agents'), (req, res) => {
-  res.json(agents);
-});
-
-// ── AI Execution (Real OpenRouter) ──────────────────────────
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-
-app.post(apiRoute('/tasks/:id/execute'), async (req, res) => {
-  const task = taskCache.find(t => t.id === req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-
-  task.status = 'EXECUTING';
-  res.json({ message: 'Execution started' });
+  const { base } = matchPath(req.url);
 
   try {
-    if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.includes('your_')) {
-       throw new Error('API Key not set');
+    // GET /api/
+    if (req.method === 'GET' && (base === '' || base === 'index.js')) {
+      return send(res, 200, { status: 'Orbitjob backend running', mode: 'stable' });
     }
 
-    const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-      model: 'qwen/qwen-2.5-coder:free',
-      messages: [{ role: 'user', content: `Solve this task and return JSON only: ${task.title} - ${task.description}` }]
-    }, {
-      headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}` }
-    });
+    // ── Auth Routes ──
+    // GET /api/auth/challenge?address=0x...
+    if (req.method === 'GET' && base === 'auth/challenge') {
+      const url = new URL(req.url, 'http://localhost');
+      const address = url.searchParams.get('address');
+      if (!address) return send(res, 400, { error: 'Address required' });
+      const nonce = `Sign into Orbitjob on GenLayer\nAddress: ${address.toLowerCase()}\nNonce: ${Date.now()}`;
+      sessions[address.toLowerCase()] = { nonce, expiresAt: Date.now() + 60000 };
+      return send(res, 200, { nonce, address });
+    }
 
-    task.status = 'COMPLETED';
-    task.executionTrace = { agent: 'AI Agent', plan: ['Analyzed request', 'Generated response'], startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), steps: [] };
-    task.result = { summary: response.data.choices[0].message.content, data: {} };
-    task.txId = '0x' + uuidv4().replace(/-/g, '').slice(0, 32);
-    task.blockNumber = 12345;
+    // POST /api/auth/signin
+    if (req.method === 'POST' && base === 'auth/signin') {
+      const { address, signature } = await parseBody(req);
+      if (!address || !signature) return send(res, 400, { error: 'Address and signature required' });
+      const session = sessions[address.toLowerCase()];
+      if (!session || Date.now() > session.expiresAt) return send(res, 401, { error: 'Challenge expired, request a new one' });
+      try {
+        const recovered = ethers.utils.verifyMessage(session.nonce, signature);
+        if (recovered.toLowerCase() !== address.toLowerCase()) return send(res, 401, { error: 'Signature does not match address' });
+      } catch {
+        return send(res, 401, { error: 'Invalid signature' });
+      }
+      delete sessions[address.toLowerCase()];
+      const token = randomUUID();
+      sessions[token] = { address: address.toLowerCase(), signedInAt: Date.now() };
+      return send(res, 200, { token, address: address.toLowerCase(), message: 'Signed in successfully' });
+    }
+
+    // GET /api/auth/me
+    if (req.method === 'GET' && base === 'auth/me') {
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.replace('Bearer ', '');
+      if (!token || !sessions[token]) return send(res, 401, { error: 'Not authenticated' });
+      return send(res, 200, { address: sessions[token].address });
+    }
+
+    // ── Skills Routes ──
+    // GET /api/skills
+    if (req.method === 'GET' && base === 'skills') {
+      const { skills } = getSkills();
+      return send(res, 200, skills);
+    }
+
+    // GET /api/skills/raw
+    if (req.method === 'GET' && base === 'skills/raw') {
+      const { raw } = getSkills();
+      res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+      return res.end(raw);
+    }
+
+    // ── Task Routes ──
+    // GET /api/tasks
+    if (req.method === 'GET' && base === 'tasks') {
+      return send(res, 200, taskCache);
+    }
+
+    // GET /api/tasks/:id
+    const taskById = base.match(/^tasks\/(.+)$/);
+    if (req.method === 'GET' && taskById) {
+      const task = taskCache.find(t => t.id === taskById[1] || t.contractTaskId === Number(taskById[1]));
+      if (!task) return send(res, 404, { error: 'Task not found' });
+      return send(res, 200, task);
+    }
+
+    // POST /api/tasks
+    if (req.method === 'POST' && base === 'tasks') {
+      const { title, description, constraints, reward, deadline, assignedAgent } = await parseBody(req);
+      if (!title || !description) return send(res, 400, { error: 'Title and description are required' });
+
+      const receipt = await mockPostTask(title, description, Math.floor(reward) || 0, constraints || '', deadline || '');
+      const agentObj = agents.find(a => a.id === assignedAgent) || agents[0];
+
+      const newTask = {
+        id: randomUUID(),
+        title,
+        description,
+        constraints: constraints || '',
+        reward: parseFloat(reward) || 0,
+        deadline: deadline || null,
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        executionTrace: null,
+        verificationStatus: 'NOT_VERIFIED',
+        result: null,
+        confidenceScore: null,
+        assignedAgent: agentObj.id,
+        contractTaskId: receipt.contractId,
+        txId: receipt.txId,
+        blockNumber: receipt.blockNumber,
+      };
+      taskCache.push(newTask);
+      db.setTasks(taskCache);
+      return send(res, 200, newTask);
+    }
+
+    // ── Agent Execution ──
+    // POST /api/tasks/:id/execute
+    const execMatch = base.match(/^tasks\/(.+)\/execute$/);
+    if (req.method === 'POST' && execMatch) {
+      const taskIndex = taskCache.findIndex(t => t.id === execMatch[1]);
+      if (taskIndex === -1) return send(res, 404, { error: 'Task not found' });
+
+      const task = taskCache[taskIndex];
+      if (task.status !== 'PENDING') return send(res, 400, { error: 'Task is not in PENDING state' });
+
+      const agent = agents.find(a => a.id === task.assignedAgent) || agents[0];
+      task.status = 'EXECUTING';
+      task.executionTrace = {
+        agent: agent.name,
+        plan: [],
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+        steps: []
+      };
+      agent.status = 'BUSY';
+      db.setTasks(taskCache);
+      send(res, 200, { message: 'Execution started', taskId: task.id, agent: agent.name });
+
+      const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+      try {
+        if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.includes('your_')) {
+          throw new Error('OPENROUTER_API_KEY is not set.');
+        }
+
+        const systemPrompt = `You are an AI agent executing tasks on the Orbitjob marketplace. Analyze the task and respond with valid JSON only (no markdown, no code fences):
+
+{
+  "reasoning_trace": ["step 1 description", "step 2 description", ...],
+  "result": {
+    "summary": "brief summary of what was done",
+    "data": {
+      "analysis": "detailed analysis",
+      "findings": "key findings",
+      "recommendation": "recommendation"
+    }
+  },
+  "confidence": 0.0 to 1.0
+}
+
+The confidence score should reflect how well you believe you fulfilled the task. Be honest.`;
+
+        const { data } = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+          model: 'qwen/qwen-2.5-coder:free',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Title: ${task.title}\n\nDescription: ${task.description}\n\nConstraints: ${task.constraints || 'None'}` }
+          ],
+          temperature: 0.3,
+          max_tokens: 1024
+        }, {
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:5005',
+            'X-Title': 'Orbitjob'
+          }
+        });
+
+        const raw = data.choices?.[0]?.message?.content || '';
+        let parsed;
+        try {
+          const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+          parsed = JSON.parse(cleaned);
+        } catch {
+          throw new Error(`AI returned invalid JSON. Response: ${raw.substring(0, 200)}`);
+        }
+
+        const reasoningTrace = parsed.reasoning_trace || [];
+        const aiResult = parsed.result || { summary: 'No summary provided.', data: { analysis: '', findings: '', recommendation: '' } };
+        const confidence = Math.min(1, Math.max(0, parseFloat(parsed.confidence) || 0));
+        const verified = confidence >= 0.8;
+
+        task.status = 'COMPLETED';
+        task.executionTrace.plan = reasoningTrace;
+        task.executionTrace.completedAt = new Date().toISOString();
+        task.executionTrace.steps = reasoningTrace.map((action, i) => ({
+          step: i + 1,
+          action,
+          timestamp: new Date(Date.now() - (reasoningTrace.length - i) * 500).toISOString()
+        }));
+        task.result = { summary: aiResult.summary, data: aiResult.data };
+        task.confidenceScore = confidence;
+        task.verificationStatus = verified ? 'VERIFIED' : 'REJECTED';
+        agent.status = 'IDLE';
+        agent.completedTasks += 1;
+
+        if (task.contractTaskId) {
+          const outputStr = JSON.stringify(aiResult);
+          const reasoningStr = JSON.stringify(reasoningTrace);
+          const bridgeReceipt = await mockSubmitExecution(task.contractTaskId, outputStr, reasoningStr, confidence, agent.id);
+          task.verificationStatus = bridgeReceipt.verificationStatus;
+          task.txId = bridgeReceipt.txId;
+          task.blockNumber = bridgeReceipt.blockNumber;
+        }
+
+        db.setTasks(taskCache);
+      } catch (err) {
+        task.status = 'FAILED';
+        if (task.executionTrace) {
+          task.executionTrace.completedAt = new Date().toISOString();
+          task.executionTrace.plan = task.executionTrace.plan || [];
+          task.executionTrace.steps = [
+            ...(task.executionTrace.steps || []),
+            { step: (task.executionTrace.steps?.length || 0) + 1, action: `[ERROR] ${err.message}`, timestamp: new Date().toISOString() }
+          ];
+        }
+        task.result = { summary: `Execution failed: ${err.message}`, data: { analysis: '', findings: '', recommendation: '' } };
+        task.confidenceScore = 0;
+        task.verificationStatus = 'FAILED';
+        agent.status = 'IDLE';
+        db.setTasks(taskCache);
+      }
+      return;
+    }
+
+    // ── Agent Routes ──
+    // GET /api/agents
+    if (req.method === 'GET' && base === 'agents') {
+      return send(res, 200, agents);
+    }
+
+    // GET /api/agents/:id
+    const agentById = base.match(/^agents\/(.+)$/);
+    if (req.method === 'GET' && agentById) {
+      const agent = agents.find(a => a.id === agentById[1]);
+      if (!agent) return send(res, 404, { error: 'Agent not found' });
+      return send(res, 200, agent);
+    }
+
+    // POST /api/agents
+    if (req.method === 'POST' && base === 'agents') {
+      const { name, model, specialty, description, icon, accent, selectedSkills } = await parseBody(req);
+      if (!name || !description) return send(res, 400, { error: 'Name and description are required' });
+
+      const newAgent = {
+        id: 'agent-' + randomUUID().slice(0, 8),
+        name,
+        model: model || 'qwen/qwen-2.5-coder:free',
+        specialty: specialty || 'General',
+        icon: icon || 'cpu',
+        price: 0.05,
+        description,
+        useCases: [],
+        rating: 0,
+        completedTasks: 0,
+        status: 'IDLE',
+        accent: accent || accentColors[agents.length % accentColors.length],
+        skills: Array.isArray(selectedSkills) ? selectedSkills : []
+      };
+      agents.push(newAgent);
+      db.setAgents(agents);
+      return send(res, 200, newAgent);
+    }
+
+    // PUT /api/agents/:id
+    if (req.method === 'PUT' && agentById) {
+      const idx = agents.findIndex(a => a.id === agentById[1]);
+      if (idx === -1) return send(res, 404, { error: 'Agent not found' });
+
+      const { name, model, specialty, icon, price, description, useCases } = await parseBody(req);
+      if (name) agents[idx].name = name;
+      if (model) agents[idx].model = model;
+      if (specialty) agents[idx].specialty = specialty;
+      if (icon) agents[idx].icon = icon;
+      if (price !== undefined) agents[idx].price = parseFloat(price);
+      if (description) agents[idx].description = description;
+      if (useCases) agents[idx].useCases = Array.isArray(useCases) ? useCases : agents[idx].useCases;
+      db.setAgents(agents);
+      return send(res, 200, agents[idx]);
+    }
+
+    // DELETE /api/agents/:id
+    if (req.method === 'DELETE' && agentById) {
+      const idx = agents.findIndex(a => a.id === agentById[1]);
+      if (idx === -1) return send(res, 404, { error: 'Agent not found' });
+      const removed = agents.splice(idx, 1)[0];
+      db.setAgents(agents);
+      return send(res, 200, { message: 'Agent removed', agent: removed });
+    }
+
+    // 404
+    send(res, 404, { error: 'Not found' });
   } catch (err) {
-    task.status = 'FAILED';
-    task.result = { summary: `Error: ${err.message}`, data: {} };
+    send(res, 500, { error: err.message });
   }
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-module.exports = app;
+};

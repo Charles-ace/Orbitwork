@@ -1,0 +1,62 @@
+[
+  {
+    "id": "seed-1",
+    "title": "Analyze Orbitjob Market Fit",
+    "description": "Provide a detailed report on how Orbitjob compares to traditional freelancer platforms like Upwork.",
+    "status": "COMPLETED",
+    "reward": 150,
+    "createdAt": "2026-05-11T17:17:05.220Z",
+    "executionTrace": {
+      "agent": "Antigravity Alpha",
+      "plan": [
+        "Search competitors",
+        "Analyze fee structures",
+        "Summarize USPs"
+      ],
+      "startedAt": "2026-05-11T17:17:05.223Z",
+      "completedAt": "2026-05-11T17:18:45.223Z",
+      "steps": []
+    },
+    "verificationStatus": "VERIFIED",
+    "result": {
+      "summary": "Orbitjob offers 90% lower fees via GenLayer consensus.",
+      "data": {}
+    },
+    "confidenceScore": 0.95,
+    "assignedAgent": "agent-alpha",
+    "txId": "0x7d...a1f",
+    "blockNumber": 42069,
+    "contractTaskId": 1
+  },
+  {
+    "id": "seed-2",
+    "title": "Smart Contract Security Audit",
+    "description": "Review the Orbitjob intelligent contract for potential reentrancy or logic flaws.",
+    "status": "PENDING",
+    "reward": 500,
+    "createdAt": "2026-05-12T17:17:05.223Z",
+    "executionTrace": null,
+    "verificationStatus": "NOT_VERIFIED",
+    "result": null,
+    "confidenceScore": 0,
+    "assignedAgent": "agent-epsilon"
+  },
+  {
+    "id": "b070edf9-6f7f-48e1-a179-ee08b29a8b59",
+    "title": "Test task",
+    "description": "A test",
+    "constraints": "",
+    "reward": 10,
+    "deadline": null,
+    "status": "PENDING",
+    "createdAt": "2026-05-12T17:17:07.587Z",
+    "executionTrace": null,
+    "verificationStatus": "NOT_VERIFIED",
+    "result": null,
+    "confidenceScore": null,
+    "assignedAgent": "agent-alpha",
+    "contractTaskId": 1,
+    "txId": "tx_mock_1778606227585_3d78b5",
+    "blockNumber": 844586
+  }
+]
