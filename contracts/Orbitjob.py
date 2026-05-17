@@ -1,4 +1,4 @@
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+# { "Depends": "py-genlayer:test" }
 from genlayer import *
 
 
@@ -11,7 +11,7 @@ class Orbitjob(gl.Contract):
     agents: TreeMap[str, str]
     outputs: TreeMap[str, str]
 
-    def __init__(self, name: str):
+    def __init__(self):
         self.task_counter = 0
 
     @gl.public.write
