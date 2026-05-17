@@ -1,3 +1,9 @@
+// Force Vercel to bundle genlayer-js package and dependencies
+try {
+  require('genlayer-js');
+  require('genlayer-js/chains');
+} catch {}
+
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
