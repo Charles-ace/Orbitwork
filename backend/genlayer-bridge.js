@@ -4,6 +4,7 @@ let mockMode = true;
 let contractAddress = null;
 let networkName = 'localnet';
 let log = null;
+let initError = null;
 
 let mockContractId = 0;
 const mockLedger = [];
@@ -59,6 +60,7 @@ async function initRealBridge() {
 
     return true;
   } catch (err) {
+    initError = err.message + (err.stack ? '\n' + err.stack : '');
     logger().error({ err, network }, `Bridge init failed for ${network}, falling back to mock mode`);
     return false;
   }
@@ -224,5 +226,7 @@ module.exports = {
   getLedger: () => mockLedger,
   getNetworkName: () => networkName,
   getContractAddress: () => contractAddress,
+  getInitError: () => initError,
   buildChainConfig,
+  setMockContractId: (id) => { mockContractId = id; },
 };

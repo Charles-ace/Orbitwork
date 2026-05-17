@@ -186,6 +186,7 @@ module.exports = async (req, res) => {
         mode: bridge.isMockMode() ? 'mock' : 'live',
         network: bridge.getNetworkName(),
         contractAddress: bridge.getContractAddress(),
+        initError: bridge.getInitError()
       });
     }
 
