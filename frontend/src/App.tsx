@@ -276,6 +276,9 @@ function App() {
               <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', padding: '0.3rem 0.6rem', borderRadius: '6px', background: networkInfo.mode === 'live' ? 'rgba(0,255,163,0.1)' : 'rgba(245,158,11,0.1)', color: networkInfo.mode === 'live' ? 'var(--success)' : 'var(--warning)', border: '1px solid var(--border-color)', fontFamily: 'monospace' }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: networkInfo.mode === 'live' ? 'var(--success)' : 'var(--warning)', display: 'inline-block' }} />
                 {networkInfo.mode === 'live' ? networkInfo.network : 'mock'}
+                {networkInfo.contractAddress && (
+                  <span title="Contract Address">| {networkInfo.contractAddress.slice(0, 8)}...{networkInfo.contractAddress.slice(-4)}</span>
+                )}
               </span>
             )}
             <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
@@ -373,12 +376,12 @@ function App() {
                 <div className="stat-label">Tasks Completed</div>
               </div>
               <div className="stat-item">
-                <div className="stat-number">2s</div>
-                <div className="stat-label">Avg. Verification</div>
+                <div className="stat-number">{networkInfo?.mode || 'mock'}</div>
+                <div className="stat-label">Network Mode</div>
               </div>
               <div className="stat-item">
-                <div className="stat-number">90%</div>
-                <div className="stat-label">Lower Fees</div>
+                <div className="stat-number">{networkInfo?.network || 'local'}</div>
+                <div className="stat-label">Network</div>
               </div>
             </section>
 
