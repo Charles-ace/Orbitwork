@@ -5,16 +5,73 @@ let app;
 beforeAll(async () => {
   process.env.OPENROUTER_API_KEY = 'test-skip';
   process.env.GENLAYER_MODE = 'mock';
+  process.env.GENLAYER_CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000000';
+  process.env.GENLAYER_NETWORK = 'localnet';
+  process.env.PORT = '0';
+  process.env.FRONTEND_ORIGIN = 'http://localhost:5173';
   app = require('../server');
+  await app.appReady;
 });
+
+afterAll(() => {
+  if (app.closeServer) app.closeServer();
+});
+
+// ── Health & Metrics ──
+
+describe('GET /healthz', () => {
+  it('returns ok status with mode and uptime', async () => {
+    const res = await request(app).get('/healthz');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body).toHaveProperty('mode');
+    expect(res.body).toHaveProperty('uptime');
+  });
+});
+
+describe('GET /metrics', () => {
+  it('returns prometheus metrics', async () => {
+    const res = await request(app).get('/metrics');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('http_requests_total');
+    expect(res.text).toContain('http_request_duration_seconds');
+    expect(res.text).toContain('http_errors_total');
+  });
+});
+
+// ── API Docs ──
+
+describe('GET /api/docs', () => {
+  it('returns swagger UI', async () => {
+    const res = await request(app).get('/api/docs/');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('swagger');
+  });
+});
+
+describe('GET /api/docs.json', () => {
+  it('returns OpenAPI spec', async () => {
+    const res = await request(app).get('/api/docs.json');
+    expect(res.status).toBe(200);
+    expect(res.body.openapi).toBe('3.0.0');
+    expect(res.body.info.title).toMatch(/Orbitjob/);
+  });
+});
+
+// ── API Status ──
 
 describe('GET /api/', () => {
   it('returns health status', async () => {
     const res = await request(app).get('/api/');
     expect(res.status).toBe(200);
     expect(res.body.status).toMatch(/Orbitjob/);
+    expect(res.body).toHaveProperty('mode');
+    expect(res.body).toHaveProperty('network');
+    expect(res.body).toHaveProperty('contractAddress');
   });
 });
+
+// ── Skills ──
 
 describe('GET /api/skills', () => {
   it('returns skills array', async () => {
@@ -28,7 +85,14 @@ describe('GET /api/skills', () => {
   });
 });
 
+// ── Tasks ──
+
 describe('GET /api/tasks', () => {
+  beforeAll(async () => {
+    // Ensure seed tasks are loaded before these tests
+    await new Promise(r => setTimeout(r, 100));
+  });
+
   it('returns paginated tasks', async () => {
     const res = await request(app).get('/api/tasks');
     expect(res.status).toBe(200);
@@ -68,6 +132,8 @@ describe('POST /api/tasks', () => {
     expect(res.body.title).toBe('Test Task');
     expect(res.body.status).toBe('PENDING');
     expect(res.body.subtasks).toEqual([]);
+    expect(res.body).toHaveProperty('contractTaskId');
+    expect(res.body).toHaveProperty('txId');
   });
 
   it('rejects missing title', async () => {
@@ -76,7 +142,16 @@ describe('POST /api/tasks', () => {
       .send({ description: 'no title' });
     expect(res.status).toBe(400);
   });
+
+  it('rejects missing description', async () => {
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'no desc' });
+    expect(res.status).toBe(400);
+  });
 });
+
+// ── Agents ──
 
 describe('GET /api/agents', () => {
   it('returns agent array', async () => {
@@ -85,6 +160,7 @@ describe('GET /api/agents', () => {
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
     expect(res.body[0]).toHaveProperty('name');
+    expect(res.body[0]).toHaveProperty('skills');
   });
 });
 
@@ -92,11 +168,11 @@ describe('POST /api/agents', () => {
   it('creates a new agent', async () => {
     const res = await request(app)
       .post('/api/agents')
-      .send({ name: 'TestBot', description: 'A test agent' });
+      .send({ name: 'TestBot', description: 'A test agent', selectedSkills: ['web-research'] });
     expect(res.status).toBe(201);
     expect(res.body.name).toBe('TestBot');
     expect(res.body).toHaveProperty('id');
-    expect(res.body.skills).toEqual([]);
+    expect(res.body.skills).toEqual(['web-research']);
   });
 
   it('rejects missing name', async () => {
@@ -106,6 +182,8 @@ describe('POST /api/agents', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ── Task CRUD ──
 
 describe('PUT /api/tasks/:id', () => {
   let taskId;
@@ -154,6 +232,8 @@ describe('DELETE /api/tasks/:id', () => {
   });
 });
 
+// ── Skills CRUD ──
+
 describe('Skills CRUD', () => {
   it('POST /api/skills creates a skill', async () => {
     const res = await request(app)
@@ -189,6 +269,8 @@ describe('Skills CRUD', () => {
   });
 });
 
+// ── Auth ──
+
 describe('Auth', () => {
   it('GET /api/auth/challenge requires address', async () => {
     const res = await request(app).get('/api/auth/challenge');
@@ -201,7 +283,37 @@ describe('Auth', () => {
     expect(res.body).toHaveProperty('nonce');
     expect(res.body.address).toBe('0x1234');
   });
+
+  it('POST /api/auth/refresh returns 401 without token', async () => {
+    const res = await request(app).post('/api/auth/refresh');
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /api/auth/refresh returns 401 with bad token', async () => {
+    const res = await request(app)
+      .post('/api/auth/refresh')
+      .set('Authorization', 'Bearer bad-token');
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /api/auth/signin rejects missing body fields', async () => {
+    const res = await request(app)
+      .post('/api/auth/signin')
+      .send({ address: '0x1234' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/auth/signin rejects invalid signature', async () => {
+    // First get a challenge
+    await request(app).get('/api/auth/challenge?address=0xabcd');
+    const res = await request(app)
+      .post('/api/auth/signin')
+      .send({ address: '0xabcd', signature: '0xbad' });
+    expect(res.status).toBe(401);
+  });
 });
+
+// ── Balances / Payments ──
 
 describe('Payment / Balances', () => {
   it('GET /api/balances returns array', async () => {
@@ -224,6 +336,13 @@ describe('Payment / Balances', () => {
     expect(res.body.balance).toBe(1000);
   });
 
+  it('POST /api/faucet rejects missing address', async () => {
+    const res = await request(app)
+      .post('/api/faucet')
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
   it('POST /api/transfer sends tokens', async () => {
     await request(app).post('/api/faucet').send({ address: '0xsender' });
     const res = await request(app)
@@ -240,7 +359,16 @@ describe('Payment / Balances', () => {
       .send({ from: '0xempty', to: '0xaddr', amount: 999999 });
     expect(res.status).toBe(400);
   });
+
+  it('POST /api/transfer rejects missing fields', async () => {
+    const res = await request(app)
+      .post('/api/transfer')
+      .send({ from: '0xaddr' });
+    expect(res.status).toBe(400);
+  });
 });
+
+// ── Agent Subtask Routing ──
 
 describe('Agent Subtask Routing', () => {
   let taskId;
@@ -263,5 +391,89 @@ describe('Agent Subtask Routing', () => {
       .post(`/api/tasks/${taskId}/delegate`)
       .send({ title: 'Sub', assignedAgent: 'agent-beta' });
     expect(res.status).toBe(400);
+  });
+
+  it('POST /api/tasks/:id/delegate rejects missing agent', async () => {
+    const res = await request(app)
+      .post(`/api/tasks/${taskId}/delegate`)
+      .send({ title: 'Sub', assignedAgent: 'agent-nonexistent' });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/tasks/:id/subtasks returns 404 for unknown task', async () => {
+    const res = await request(app).get('/api/tasks/nonexistent/subtasks');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /api/tasks/:id/subtasks/:subId/execute returns 404 for unknown task', async () => {
+    const res = await request(app)
+      .post('/api/tasks/nonexistent/subtasks/sub-1/execute')
+      .send({ output: 'done' });
+    expect(res.status).toBe(404);
+  });
+});
+
+// ── E2E: Full Task Creation -> Execution -> Verification Flow ──
+
+describe('E2E: Full Task Flow', () => {
+  let createdTaskId;
+
+  it('completes the full task lifecycle', async () => {
+    // 1. Create task
+    const createRes = await request(app)
+      .post('/api/tasks')
+      .send({
+        title: 'E2E Test Task',
+        description: 'Automated end-to-end test task',
+        reward: 250,
+        assignedAgent: 'agent-alpha',
+      });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.status).toBe('PENDING');
+    expect(createRes.body.assignedAgent).toBe('agent-alpha');
+    createdTaskId = createRes.body.id;
+
+    // 2. Retrieve the task
+    const getRes = await request(app).get(`/api/tasks/${createdTaskId}`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.title).toBe('E2E Test Task');
+
+    // 3. Execute the task (will return immediately, actual exec is async)
+    const executeRes = await request(app)
+      .post(`/api/tasks/${createdTaskId}/execute`);
+    expect(executeRes.status).toBe(200);
+    expect(executeRes.body.message).toMatch(/Execution started/);
+
+    // 4. Task should now be EXECUTING
+    const executingRes = await request(app).get(`/api/tasks/${createdTaskId}`);
+    expect(executingRes.body.status).toBe('EXECUTING');
+
+    // 5. Wait for execution to complete (mock mode: bridge.postTask has 2s latency)
+    await new Promise(r => setTimeout(r, 3000));
+
+    // 6. Task should now be FAILED (no real API key)
+    const finalRes = await request(app).get(`/api/tasks/${createdTaskId}`);
+    expect(finalRes.body.status).toBe('FAILED');
+    expect(finalRes.body.verificationStatus).toBe('FAILED');
+    expect(finalRes.body.executionTrace).toBeTruthy();
+    expect(finalRes.body.executionTrace.completedAt).toBeTruthy();
+
+    // 7. Get all tasks and verify it appears
+    const listRes = await request(app).get('/api/tasks');
+    const found = listRes.body.items.find(t => t.id === createdTaskId);
+    expect(found).toBeTruthy();
+    expect(found.status).toBe('FAILED');
+  });
+});
+
+// ── CORS Enforcement ──
+
+describe('CORS Enforcement', () => {
+  it('blocks requests from disallowed origins', async () => {
+    const res = await request(app)
+      .get('/api/')
+      .set('Origin', 'https://evil.com');
+    // The origin header won't match FRONTEND_ORIGIN, so CORS should deny
+    expect(res.headers['access-control-allow-origin']).not.toBe('https://evil.com');
   });
 });

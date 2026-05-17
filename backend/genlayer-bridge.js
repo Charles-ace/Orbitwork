@@ -3,9 +3,14 @@ let writeClient = null;
 let mockMode = true;
 let contractAddress = null;
 let networkName = 'localnet';
+let log = null;
 
 let mockContractId = 0;
 const mockLedger = [];
+
+function logger() {
+  return log || { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+}
 
 function simLatency(ms = 2000) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -28,18 +33,15 @@ async function initRealBridge() {
 
   try {
     const { createClient, createAccount } = await import('genlayer-js');
-
     const chain = await buildChainConfig(network);
-
     realClient = createClient({ chain });
 
-    // Use get_task_count to match deployed contract
     const counter = await realClient.readContract({
       address: contractAddress,
       functionName: 'get_task_count',
       args: [],
     });
-    console.log(`  → [GenLayer Bridge] Connected to ${network}. Task count: ${counter}`);
+    logger().info({ network, taskCount: Number(counter) }, `Connected to ${network}. Task count: ${counter}`);
 
     const privateKey = process.env.GENLAYER_PRIVATE_KEY || null;
     const accountStr = process.env.GENLAYER_ACCOUNT_ADDRESS || null;
@@ -47,18 +49,17 @@ async function initRealBridge() {
     if (privateKey) {
       const account = createAccount(privateKey);
       writeClient = createClient({ chain, account });
-      console.log(`  → [GenLayer Bridge] Write client ready (account: ${account.address})`);
+      logger().info({ account: account.address }, 'Write client ready');
     } else if (accountStr) {
       writeClient = createClient({ chain, account: accountStr, provider: undefined });
-      console.log(`  → [GenLayer Bridge] Write client ready (address: ${accountStr})`);
+      logger().info({ address: accountStr }, 'Write client ready');
     } else {
-      console.log(`  → [GenLayer Bridge] No private key — writes will use mock fallback`);
+      logger().warn('No private key — writes will use mock fallback');
     }
 
     return true;
   } catch (err) {
-    console.error(`  → [GenLayer Bridge] Init failed: ${err.message}`);
-    console.error(`  → [GenLayer Bridge] Falling back to mock mode`);
+    logger().error({ err, network }, `Bridge init failed for ${network}, falling back to mock mode`);
     return false;
   }
 }
@@ -85,26 +86,25 @@ async function buildChainConfig(network) {
   };
 }
 
-async function init() {
+async function init(customLogger) {
+  if (customLogger) log = customLogger;
   contractAddress = process.env.GENLAYER_CONTRACT_ADDRESS || null;
   const mode = process.env.GENLAYER_MODE || 'mock';
 
   if (contractAddress && mode === 'real') {
-    console.log(`\n  ⚡ Initializing GenLayer Bridge...`);
-    console.log(`  → Contract: ${contractAddress}`);
+    logger().info({ contractAddress, network: process.env.GENLAYER_NETWORK }, 'Initializing GenLayer Bridge');
     const ok = await initRealBridge();
     if (ok) {
       mockMode = false;
-      console.log(`  → ${networkName} mode active`);
+      logger().info({ network: networkName }, `${networkName} mode active`);
     }
   }
 
   if (mockMode) {
-    console.log(`  → Mock Bridge active (contract: ${contractAddress || 'none'})`);
+    logger().info({ contractAddress: contractAddress || 'none' }, 'Mock Bridge active');
   }
 }
 
-// Deployed contract signature: post_task(title: str, description: str, reward: str) -> None
 async function postTask(title, description, reward, constraints, deadline) {
   if (!mockMode && writeClient) {
     const { TransactionStatus, ExecutionResult } = await import('genlayer-js/types');
@@ -145,11 +145,10 @@ async function postTask(title, description, reward, constraints, deadline) {
     blockNumber: Math.floor(Math.random() * 999999) + 1,
   };
   mockTx('post_task', { contractId: mockContractId, title, description, reward, constraints, deadline });
-  console.log(`  → [Mock Bridge] Task posted — contract ID: ${mockContractId} | tx: ${receipt.txId}`);
+  logger().info({ contractId: mockContractId, txId: receipt.txId }, 'Task posted (mock)');
   return receipt;
 }
 
-// Deployed contract signature: submit_execution(task_id: str, output: str, agent_id: str) -> None
 async function submitExecution(contractTaskId, output, reasoning, confidence, agentId) {
   if (!mockMode && writeClient) {
     const { TransactionStatus, ExecutionResult } = await import('genlayer-js/types');
@@ -180,7 +179,7 @@ async function submitExecution(contractTaskId, output, reasoning, confidence, ag
     blockNumber: Math.floor(Math.random() * 999999) + 1,
   };
   mockTx('submit_execution', { contractTaskId, output, reasoning, confidence, agentId, verdict: 'VERIFIED' });
-  console.log(`  → [Mock Bridge] Execution submitted — task ID: ${contractTaskId} | tx: ${receipt.txId}`);
+  logger().info({ taskId: contractTaskId, txId: receipt.txId }, 'Execution submitted (mock)');
   return receipt;
 }
 
@@ -202,21 +201,9 @@ async function getOnchainTask(taskId) {
   if (!mockMode && realClient) {
     try {
       const [title, status, output] = await Promise.all([
-        realClient.readContract({
-          address: contractAddress,
-          functionName: 'get_task_title',
-          args: [String(taskId)],
-        }),
-        realClient.readContract({
-          address: contractAddress,
-          functionName: 'get_task_status',
-          args: [String(taskId)],
-        }),
-        realClient.readContract({
-          address: contractAddress,
-          functionName: 'get_task_output',
-          args: [String(taskId)],
-        }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_title', args: [String(taskId)] }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_status', args: [String(taskId)] }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_output', args: [String(taskId)] }),
       ]);
       return { title, status, output };
     } catch { return null; }

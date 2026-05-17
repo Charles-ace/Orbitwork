@@ -2,37 +2,156 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const dotenv = require('dotenv');
+const dotenvSafe = require('dotenv-safe');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+const pino = require('pino');
+const promClient = require('prom-client');
+const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerUi = require('swagger-ui-express');
 const bridge = require('./genlayer-bridge');
 
-dotenv.config();
-dotenv.config({ path: '../.env', override: true });
+dotenvSafe.config({
+  path: path.resolve(__dirname, '..', '.env'),
+  example: path.resolve(__dirname, '.env.example'),
+});
+
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  ...(process.env.NODE_ENV !== 'production' && {
+    transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } },
+  }),
+});
 
 const app = express();
 const PORT = process.env.PORT || 5005;
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+
+promClient.collectDefaultMetrics({ register: promClient.register });
+
+const httpRequestDuration = new promClient.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'path', 'status'],
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+const httpRequestsTotal = new promClient.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'path', 'status'],
+});
+
+const httpErrorsTotal = new promClient.Counter({
+  name: 'http_errors_total',
+  help: 'Total number of HTTP 5xx errors',
+  labelNames: ['method', 'path'],
+});
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: FRONTEND_ORIGIN,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));
 
+app.use((req, res, next) => {
+  req.id = uuidv4();
+  res.setHeader('X-Request-Id', req.id);
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const routePath = req.route ? req.route.path : req.path;
+    httpRequestDuration.observe({ method: req.method, path: routePath, status: res.statusCode }, duration / 1000);
+    httpRequestsTotal.inc({ method: req.method, path: routePath, status: res.statusCode });
+    if (res.statusCode >= 500) {
+      httpErrorsTotal.inc({ method: req.method, path: routePath });
+    }
+    logger.info({ reqId: req.id, method: req.method, path: req.path, status: res.statusCode, duration: `${duration}ms` }, 'request completed');
+  });
+  next();
+});
+
+// ── General API rate limiter ──
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 200,
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000,
+  max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', apiLimiter);
 
+// ── Stricter rate limiter for auth endpoints ──
+const authLimiter = rateLimit({
+  windowMs: 60000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts, please try again later.' },
+});
+app.use(['/api/auth', '/auth'], authLimiter);
+
+// ── Stricter rate limiter for execute endpoint ──
+const executeLimiter = rateLimit({
+  windowMs: 30000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many execution requests, please slow down.' },
+});
+app.use(['/api/tasks/*/execute', '/tasks/*/execute'], executeLimiter);
+
+// ── Central error handler ──
+app.use((err, req, res, _next) => {
+  const status = err.status || err.statusCode || 500;
+  logger.error({ reqId: req.id, err, status }, 'Unhandled error');
+  if (status >= 500) {
+    httpErrorsTotal.inc({ method: req.method, path: req.route ? req.route.path : req.path });
+  }
+  const knownCodes = [400, 401, 403, 404, 409, 422, 429];
+  const safeStatus = knownCodes.includes(status) ? status : 500;
+  res.status(safeStatus).json({
+    error: safeStatus === 500 ? 'Internal server error' : err.message,
+    ...(err.code && { code: err.code }),
+  });
+});
+
+// ── OpenAPI / Swagger ──
+const swaggerSpec = swaggerJsdoc({
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Orbitjob API',
+      version: '1.0.0',
+      description: 'AI Task Marketplace on GenLayer',
+    },
+    servers: [{ url: '/api' }],
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'UUID' },
+      },
+    },
+  },
+  apis: [__filename],
+});
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/api/docs.json', (req, res) => res.json(swaggerSpec));
+
+app.get('/healthz', (req, res) => {
+  res.json({ status: 'ok', mode: bridge.isMockMode() ? 'mock' : 'live', uptime: process.uptime() });
+});
+
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', promClient.register.contentType);
+  res.end(await promClient.register.metrics());
+});
+
 // ── Skills System ──────────────────────────────────────────────
 const fs = require('fs');
-const path = require('path');
 const SKILLS_FILE = path.join(__dirname, '..', 'docs', 'expert-skills.md');
 
 let skillsCache = null;
@@ -60,7 +179,7 @@ function loadSkills() {
       return skills;
     }
   } catch (e) {
-    console.error('Failed to load skills:', e.message);
+    logger.error({ err: e }, 'Failed to load skills');
   }
   return [];
 }
@@ -70,8 +189,42 @@ function getSkills() {
   return skillsCache;
 }
 
-// ── Task Cache ───────────────────────────────────────────────
-// Seed tasks only used in mock mode — live mode uses onchain state
+// ── Redis Sessions ─────────────────────────────────────────────
+let redis;
+let redisAvailable = false;
+
+async function initRedis() {
+  const redisUrl = process.env.REDIS_URL;
+  try {
+    const Redis = require('ioredis');
+    if (redisUrl) {
+      redis = new Redis(redisUrl, {
+        maxRetriesPerRequest: 3,
+        retryStrategy(times) { return times > 3 ? null : Math.min(times * 200, 2000); },
+        lazyConnect: true,
+      });
+    } else {
+      redis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+        password: process.env.REDIS_PASSWORD || undefined,
+        maxRetriesPerRequest: 3,
+        retryStrategy(times) { return times > 3 ? null : Math.min(times * 200, 2000); },
+        lazyConnect: true,
+      });
+    }
+    await redis.connect();
+    await redis.ping();
+    redisAvailable = true;
+    logger.info('Redis connected');
+  } catch (err) {
+    logger.warn({ err }, 'Redis unavailable, falling back to in-memory sessions');
+    redis = null;
+    redisAvailable = false;
+  }
+}
+
+// ── Seed Tasks ───────────────────────────────────────────────
 const seedTasks = [
   {
     id: 'seed-1',
@@ -107,7 +260,6 @@ const seedTasks = [
 let taskCache = [];
 
 const accentColors = ['purple', 'blue', 'green', 'orange', 'red', 'cyan'];
-const iconMap = { cpu: 'cpu', barChart: 'barChart', code: 'code', penLine: 'penLine', shield: 'shield', search: 'search' };
 
 let agents = [
   { id: 'agent-alpha', name: 'Antigravity Alpha', model: 'qwen/qwen-2.5-coder:free', specialty: 'General Purpose', icon: 'cpu', price: 0.05, description: 'Versatile AI agent capable of handling a wide range of tasks from research to content generation.', useCases: ['Market research & trend analysis', 'General data processing', 'Document summarization', 'Multi-domain Q&A'], rating: 4.8, completedTasks: 142, status: 'IDLE', accent: 'purple', skills: ['web-research', 'content-gen'] },
@@ -122,18 +274,89 @@ let agents = [
 const { ethers } = require('ethers');
 let sessions = {};
 
-app.get('/api/auth/challenge', (req, res) => {
+function getRedisClient() { return redis; }
+
+async function getSession(tokenOrAddress) {
+  if (redisAvailable) {
+    const data = await redis.get(`session:${tokenOrAddress}`);
+    return data ? JSON.parse(data) : null;
+  }
+  return sessions[tokenOrAddress] || null;
+}
+
+async function setSession(key, value) {
+  if (redisAvailable) {
+    await redis.setex(`session:${key}`, 3600, JSON.stringify(value));
+    return;
+  }
+  sessions[key] = value;
+}
+
+async function delSession(key) {
+  if (redisAvailable) {
+    await redis.del(`session:${key}`);
+    return;
+  }
+  delete sessions[key];
+}
+
+/**
+ * @openapi
+ * /auth/challenge:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Get a signing challenge nonce
+ *     parameters:
+ *       - in: query
+ *         name: address
+ *         schema: { type: string }
+ *         required: true
+ *     responses:
+ *       200:
+ *         description: Nonce for signing
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 nonce: { type: string }
+ *                 address: { type: string }
+ *       400:
+ *         description: Address required
+ */
+app.get(['/api/auth/challenge', '/auth/challenge'], async (req, res) => {
   const { address } = req.query;
   if (!address) return res.status(400).json({ error: 'Address required' });
   const nonce = `Sign into Orbitjob on GenLayer\nAddress: ${address.toLowerCase()}\nNonce: ${Date.now()}`;
-  sessions[address.toLowerCase()] = { nonce, expiresAt: Date.now() + 60000 };
+  await setSession(address.toLowerCase(), { nonce, expiresAt: Date.now() + 60000 });
   res.json({ nonce, address });
 });
 
-app.post('/api/auth/signin', (req, res) => {
+/**
+ * @openapi
+ * /auth/signin:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Sign in with a signed nonce
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               address: { type: string }
+ *               signature: { type: string }
+ *     responses:
+ *       200:
+ *         description: Auth token
+ *       401:
+ *         description: Invalid signature
+ */
+app.post(['/api/auth/signin', '/auth/signin'], async (req, res) => {
   const { address, signature } = req.body;
   if (!address || !signature) return res.status(400).json({ error: 'Address and signature required' });
-  const session = sessions[address.toLowerCase()];
+  const session = await getSession(address.toLowerCase());
   if (!session || Date.now() > session.expiresAt) return res.status(401).json({ error: 'Challenge expired, request a new one' });
   try {
     const recovered = ethers.verifyMessage(session.nonce, signature);
@@ -141,22 +364,78 @@ app.post('/api/auth/signin', (req, res) => {
   } catch {
     return res.status(401).json({ error: 'Invalid signature' });
   }
-  delete sessions[address.toLowerCase()];
+  await delSession(address.toLowerCase());
   const token = uuidv4();
-  sessions[token] = { address: address.toLowerCase(), signedInAt: Date.now() };
+  await setSession(token, { address: address.toLowerCase(), signedInAt: Date.now() });
   res.json({ token, address: address.toLowerCase(), message: 'Signed in successfully' });
 });
 
-// Helper to handle routes with or without /api prefix
 const apiRoute = (path) => [`/api${path}`, path];
 
-app.get(apiRoute('/auth/me'), (req, res) => {
+/**
+ * @openapi
+ * /auth/me:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Get current session info
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Session info
+ *       401:
+ *         description: Not authenticated
+ */
+app.get(apiRoute('/auth/me'), async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token || !sessions[token]) return res.status(401).json({ error: 'Not authenticated' });
-  res.json({ address: sessions[token].address });
+  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+  const session = await getSession(token);
+  if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ address: session.address });
 });
 
-// ── Health check ─────────────────────────────────────────────
+/**
+ * @openapi
+ * /auth/refresh:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Refresh auth token expiry (resets 1h TTL)
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Token refreshed
+ *       401:
+ *         description: Not authenticated
+ */
+app.post(['/api/auth/refresh', '/auth/refresh'], async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+  const session = await getSession(token);
+  if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  await setSession(token, session);
+  res.json({ token, message: 'Token refreshed' });
+});
+
+/**
+ * @openapi
+ * /:
+ *   get:
+ *     tags: [Health]
+ *     summary: Backend health check
+ *     responses:
+ *       200:
+ *         description: Health status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string }
+ *                 mode: { type: string }
+ *                 network: { type: string }
+ *                 contractAddress: { type: string, nullable: true }
+ */
 app.get(apiRoute('/'), (req, res) => {
   res.json({
     status: 'Orbitjob backend running',
@@ -168,11 +447,43 @@ app.get(apiRoute('/'), (req, res) => {
 });
 
 // ── Skills Routes ──────────────────────────────────────────────
+/**
+ * @openapi
+ * /skills:
+ *   get:
+ *     tags: [Skills]
+ *     summary: List all skills
+ *     responses:
+ *       200:
+ *         description: Skills array
+ */
 app.get(apiRoute('/skills'), (req, res) => {
   res.json(getSkills());
 });
 
-// Create a skill
+/**
+ * @openapi
+ * /skills:
+ *   post:
+ *     tags: [Skills]
+ *     summary: Create a new skill
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               id: { type: string }
+ *               label: { type: string }
+ *               description: { type: string }
+ *               promptDirective: { type: string }
+ *     responses:
+ *       201:
+ *         description: Created
+ *       409:
+ *         description: Duplicate
+ */
 app.post(apiRoute('/skills'), (req, res) => {
   const { id, label, description, promptDirective } = req.body;
   if (!id || !label) return res.status(400).json({ error: 'id and label are required' });
@@ -184,7 +495,6 @@ app.post(apiRoute('/skills'), (req, res) => {
   res.status(201).json(newSkill);
 });
 
-// Update a skill
 app.put(apiRoute('/skills/:id'), (req, res) => {
   const skills = getSkills();
   const skill = skills.find(s => s.id === req.params.id);
@@ -197,7 +507,6 @@ app.put(apiRoute('/skills/:id'), (req, res) => {
   res.json(skill);
 });
 
-// Delete a skill
 app.delete(apiRoute('/skills/:id'), (req, res) => {
   const skills = getSkills();
   const idx = skills.findIndex(s => s.id === req.params.id);
@@ -208,8 +517,32 @@ app.delete(apiRoute('/skills/:id'), (req, res) => {
 });
 
 // ── Task Routes ──────────────────────────────────────────────
-
-// List all tasks (with filtering & pagination)
+/**
+ * @openapi
+ * /tasks:
+ *   get:
+ *     tags: [Tasks]
+ *     summary: List tasks with filtering and pagination
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: assignedAgent
+ *         schema: { type: string }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Paginated task list
+ */
 app.get(apiRoute('/tasks'), async (req, res) => {
   const { status, assignedAgent, search, page: pageStr, limit: limitStr } = req.query;
   const page = Math.max(1, parseInt(pageStr) || 1);
@@ -239,18 +572,32 @@ app.get(apiRoute('/tasks'), async (req, res) => {
   res.json({ items, total, page, totalPages, limit });
 });
 
-// Get single task
+/**
+ * @openapi
+ * /tasks/{id}:
+ *   get:
+ *     tags: [Tasks]
+ *     summary: Get a single task
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Task object
+ *       404:
+ *         description: Not found
+ */
 app.get(apiRoute('/tasks/:id'), (req, res) => {
   const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
 });
 
-// Update a task
 app.put(apiRoute('/tasks/:id'), (req, res) => {
   const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-
   const { title, description, constraints, reward, deadline, assignedAgent } = req.body;
   if (title) task.title = title;
   if (description) task.description = description;
@@ -258,11 +605,9 @@ app.put(apiRoute('/tasks/:id'), (req, res) => {
   if (reward !== undefined) task.reward = parseFloat(reward);
   if (deadline !== undefined) task.deadline = deadline;
   if (assignedAgent) task.assignedAgent = assignedAgent;
-
   res.json(task);
 });
 
-// Delete a task
 app.delete(apiRoute('/tasks/:id'), (req, res) => {
   const idx = taskCache.findIndex(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (idx === -1) return res.status(404).json({ error: 'Task not found' });
@@ -270,22 +615,40 @@ app.delete(apiRoute('/tasks/:id'), (req, res) => {
   res.json({ message: 'Task removed', task: removed });
 });
 
-// Create a task
+/**
+ * @openapi
+ * /tasks:
+ *   post:
+ *     tags: [Tasks]
+ *     summary: Create a new task
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title: { type: string }
+ *               description: { type: string }
+ *               constraints: { type: string }
+ *               reward: { type: number }
+ *               deadline: { type: string }
+ *               assignedAgent: { type: string }
+ *               creator: { type: string }
+ *     responses:
+ *       201:
+ *         description: Created
+ */
 app.post(apiRoute('/tasks'), async (req, res) => {
   const { title, description, constraints, reward, deadline, assignedAgent } = req.body;
-
   if (!title || !description) {
     return res.status(400).json({ error: 'Title and description are required' });
   }
-
   const receipt = await bridge.postTask(title, description, Math.floor(reward) || 0, constraints || '', deadline || '');
-
   const agentObj = agents.find(a => a.id === assignedAgent) || agents[0];
-
   const newTask = {
     id: `contract-${receipt.contractId}`,
-    title,
-    description,
+    title, description,
     constraints: constraints || '',
     reward: parseFloat(reward) || 0,
     deadline: deadline || null,
@@ -293,8 +656,7 @@ app.post(apiRoute('/tasks'), async (req, res) => {
     createdAt: new Date().toISOString(),
     executionTrace: null,
     verificationStatus: 'NOT_VERIFIED',
-    result: null,
-    confidenceScore: null,
+    result: null, confidenceScore: null,
     assignedAgent: agentObj.id,
     contractTaskId: receipt.contractId,
     txId: receipt.txId,
@@ -302,38 +664,41 @@ app.post(apiRoute('/tasks'), async (req, res) => {
     subtasks: [],
     creator: req.body.creator || null,
   };
-
   taskCache.push(newTask);
   res.status(201).json(newTask);
 });
 
 // ── Agent Execution ──────────────────────────────────────────
-
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = 'qwen/qwen-2.5-coder:free';
 
+/**
+ * @openapi
+ * /tasks/{id}/execute:
+ *   post:
+ *     tags: [Tasks]
+ *     summary: Execute a task via AI agent
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Execution started
+ *       404:
+ *         description: Task not found
+ */
 app.post(apiRoute('/tasks/:id/execute'), async (req, res) => {
   const { id } = req.params;
   const taskIndex = taskCache.findIndex(t => t.id === id);
-
-  if (taskIndex === -1) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-
-  if (taskCache[taskIndex].status !== 'PENDING') {
-    return res.status(400).json({ error: 'Task is not in PENDING state' });
-  }
+  if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
+  if (taskCache[taskIndex].status !== 'PENDING') return res.status(400).json({ error: 'Task is not in PENDING state' });
 
   const task = taskCache[taskIndex];
   const agent = agents.find(a => a.id === task.assignedAgent) || agents[0];
   task.status = 'EXECUTING';
-  task.executionTrace = {
-    agent: agent.name,
-    plan: [],
-    startedAt: new Date().toISOString(),
-    completedAt: null,
-    steps: []
-  };
+  task.executionTrace = { agent: agent.name, plan: [], startedAt: new Date().toISOString(), completedAt: null, steps: [] };
   agent.status = 'BUSY';
 
   res.json({ message: 'Execution started', taskId: id, agent: agent.name });
@@ -358,11 +723,7 @@ app.post(apiRoute('/tasks/:id/execute'), async (req, res) => {
   "reasoning_trace": ["step 1 description", "step 2 description", ...],
   "result": {
     "summary": "brief summary of what was done",
-    "data": {
-      "analysis": "detailed analysis",
-      "findings": "key findings",
-      "recommendation": "recommendation"
-    }
+    "data": { "analysis": "detailed analysis", "findings": "key findings", "recommendation": "recommendation" }
   },
   "confidence": 0.0 to 1.0
 }
@@ -377,8 +738,7 @@ The confidence score should reflect how well you believe you fulfilled the task.
           { role: 'system', content: systemPrompt },
           { role: 'user', content: `Title: ${task.title}\n\nDescription: ${task.description}\n\nConstraints: ${task.constraints || 'None'}` }
         ],
-        temperature: 0.3,
-        max_tokens: 1024
+        temperature: 0.3, max_tokens: 1024
       },
       {
         headers: {
@@ -392,7 +752,6 @@ The confidence score should reflect how well you believe you fulfilled the task.
 
     const raw = data.choices?.[0]?.message?.content || '';
     let parsed;
-
     try {
       const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
       parsed = JSON.parse(cleaned);
@@ -403,29 +762,20 @@ The confidence score should reflect how well you believe you fulfilled the task.
     const reasoningTrace = parsed.reasoning_trace || [];
     const aiResult = parsed.result || { summary: 'No summary provided.', data: { analysis: '', findings: '', recommendation: '' } };
     const confidence = Math.min(1, Math.max(0, parseFloat(parsed.confidence) || 0));
-
     const verified = confidence >= 0.8;
 
     task.status = 'COMPLETED';
     task.executionTrace.plan = reasoningTrace;
     task.executionTrace.completedAt = new Date().toISOString();
-    task.executionTrace.steps = reasoningTrace.map((action, i) => ({
-      step: i + 1,
-      action,
-      timestamp: new Date(Date.now() - (reasoningTrace.length - i) * 500).toISOString()
-    }));
-    task.result = {
-      summary: aiResult.summary,
-      data: aiResult.data
-    };
+    task.executionTrace.steps = reasoningTrace.map((action, i) => ({ step: i + 1, action, timestamp: new Date(Date.now() - (reasoningTrace.length - i) * 500).toISOString() }));
+    task.result = { summary: aiResult.summary, data: aiResult.data };
     task.confidenceScore = confidence;
     task.verificationStatus = verified ? 'VERIFIED' : 'REJECTED';
     agent.status = 'IDLE';
     agent.completedTasks += 1;
 
-    console.log(`✓ Task "${task.title}" executed by ${agent.name} — confidence: ${confidence} — ${verified ? 'VERIFIED' : 'REJECTED'}`);
+    logger.info({ taskId: id, agent: agent.name, confidence, verified }, 'Task executed');
 
-    // Payment: reward agent on successful execution
     if (verified && task.reward > 0) {
       const creatorAddr = task.creator || '0xdefault';
       const agentAddr = `agent:${agent.id}`;
@@ -434,14 +784,13 @@ The confidence score should reflect how well you believe you fulfilled the task.
       if (balances[creatorAddr] >= task.reward) {
         balances[creatorAddr] -= task.reward;
         balances[agentAddr] += task.reward;
-        console.log(`  → [Payment] ${task.reward} GLR transferred from ${creatorAddr} to ${agent.name}`);
+        logger.info({ reward: task.reward, from: creatorAddr, to: agent.name }, 'Payment transferred');
       } else {
-        console.log(`  → [Payment] Insufficient balance for ${creatorAddr} — reward pending`);
+        logger.warn({ reward: task.reward, from: creatorAddr, to: agent.name }, 'Insufficient balance for payment');
         if (!task.pendingReward) task.pendingReward = { from: creatorAddr, to: agentAddr, amount: task.reward };
       }
     }
 
-    // Submit execution result to GenLayer Bridge
     if (task.contractTaskId) {
       const outputStr = JSON.stringify(aiResult);
       const reasoningStr = JSON.stringify(reasoningTrace);
@@ -450,77 +799,57 @@ The confidence score should reflect how well you believe you fulfilled the task.
       task.txId = bridgeReceipt.txId;
       task.blockNumber = bridgeReceipt.blockNumber;
     }
-
   } catch (err) {
-    console.error(`✗ Task "${task.title}" execution failed:`, err.message);
-
+    logger.error({ err, taskId: id, task: task.title }, 'Task execution failed');
     task.status = 'FAILED';
     task.executionTrace.completedAt = new Date().toISOString();
     task.executionTrace.plan = task.executionTrace.plan || [];
-    task.executionTrace.steps = [
-      ...(task.executionTrace.steps || []),
-      { step: (task.executionTrace.steps?.length || 0) + 1, action: `[ERROR] ${err.message}`, timestamp: new Date().toISOString() }
-    ];
-    task.result = {
-      summary: `Execution failed: ${err.message}`,
-      data: { analysis: '', findings: '', recommendation: '' }
-    };
+    task.executionTrace.steps = [...(task.executionTrace.steps || []), { step: (task.executionTrace.steps?.length || 0) + 1, action: `[ERROR] ${err.message}`, timestamp: new Date().toISOString() }];
+    task.result = { summary: `Execution failed: ${err.message}`, data: { analysis: '', findings: '', recommendation: '' } };
     task.confidenceScore = 0;
     task.verificationStatus = 'FAILED';
     agent.status = 'IDLE';
-    agent.completedTasks += 0;
   }
 });
 
 // ── Agent Routes ─────────────────────────────────────────────
-
-// List all agents
+/**
+ * @openapi
+ * /agents:
+ *   get:
+ *     tags: [Agents]
+ *     summary: List all agents
+ *     responses:
+ *       200:
+ *         description: Agents array
+ */
 app.get(apiRoute('/agents'), (req, res) => {
   res.json(agents);
 });
 
-// Get single agent
 app.get(apiRoute('/agents/:id'), (req, res) => {
   const agent = agents.find(a => a.id === req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   res.json(agent);
 });
 
-// Create a new agent
 app.post(apiRoute('/agents'), (req, res) => {
   const { name, model, specialty, icon, price, description, useCases, selectedSkills } = req.body;
-
-  if (!name || !description) {
-    return res.status(400).json({ error: 'Name and description are required' });
-  }
-
+  if (!name || !description) return res.status(400).json({ error: 'Name and description are required' });
   const accent = accentColors[agents.length % accentColors.length];
-
   const newAgent = {
-    id: uuidv4(),
-    name,
-    model: model || 'qwen/qwen-2.5-coder:free',
-    specialty: specialty || 'General',
-    icon: icon || 'cpu',
-    price: parseFloat(price) || 0,
-    description,
-    useCases: Array.isArray(useCases) ? useCases : [],
-    rating: 0,
-    completedTasks: 0,
-    status: 'IDLE',
-    accent,
+    id: uuidv4(), name, model: model || 'qwen/qwen-2.5-coder:free', specialty: specialty || 'General',
+    icon: icon || 'cpu', price: parseFloat(price) || 0, description,
+    useCases: Array.isArray(useCases) ? useCases : [], rating: 0, completedTasks: 0, status: 'IDLE', accent,
     skills: Array.isArray(selectedSkills) ? selectedSkills : [],
   };
-
   agents.push(newAgent);
   res.status(201).json(newAgent);
 });
 
-// Update an agent
 app.put(apiRoute('/agents/:id'), (req, res) => {
   const idx = agents.findIndex(a => a.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
-
   const { name, model, specialty, icon, price, description, useCases } = req.body;
   if (name) agents[idx].name = name;
   if (model) agents[idx].model = model;
@@ -529,15 +858,12 @@ app.put(apiRoute('/agents/:id'), (req, res) => {
   if (price !== undefined) agents[idx].price = parseFloat(price);
   if (description) agents[idx].description = description;
   if (useCases) agents[idx].useCases = Array.isArray(useCases) ? useCases : agents[idx].useCases;
-
   res.json(agents[idx]);
 });
 
-// Delete an agent
-app.delete('/api/agents/:id', (req, res) => {
+app.delete(apiRoute('/agents/:id'), (req, res) => {
   const idx = agents.findIndex(a => a.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
-
   const removed = agents.splice(idx, 1)[0];
   res.json({ message: 'Agent removed', agent: removed });
 });
@@ -550,100 +876,80 @@ function ensureBalance(address) {
   return balances[address];
 }
 
-// GET /api/balances
+/**
+ * @openapi
+ * /balances:
+ *   get:
+ *     tags: [Balances]
+ *     summary: List all balances
+ *     responses:
+ *       200:
+ *         description: Balances array
+ */
 app.get(apiRoute('/balances'), (req, res) => {
   res.json(Object.entries(balances).map(([address, balance]) => ({ address, balance })));
 });
 
-// GET /api/balances/:address
 app.get(apiRoute('/balances/:address'), (req, res) => {
   const balance = ensureBalance(req.params.address);
   res.json({ address: req.params.address, balance });
 });
 
-// POST /api/faucet — get free test GLR
 app.post(apiRoute('/faucet'), (req, res) => {
   const { address } = req.body;
   if (!address) return res.status(400).json({ error: 'Address required' });
   ensureBalance(address);
   balances[address] += 1000;
-  console.log(`  → [Faucet] 1000 GLR sent to ${address}`);
+  logger.info({ address, amount: 1000 }, 'Faucet claimed');
   res.json({ address, balance: balances[address], message: '1000 GLR claimed' });
 });
 
-// POST /api/transfer — send GLR between addresses
 app.post(apiRoute('/transfer'), (req, res) => {
   const { from, to, amount } = req.body;
   if (!from || !to || !amount) return res.status(400).json({ error: 'from, to, and amount required' });
-  ensureBalance(from);
-  ensureBalance(to);
+  ensureBalance(from); ensureBalance(to);
   const amt = parseFloat(amount);
   if (balances[from] < amt) return res.status(400).json({ error: 'Insufficient balance' });
   balances[from] -= amt;
   balances[to] += amt;
-  console.log(`  → [Transfer] ${amt} GLR from ${from} to ${to}`);
+  logger.info({ from, to, amount: amt }, 'Transfer completed');
   res.json({ from, to, amount: amt, fromBalance: balances[from], toBalance: balances[to] });
 });
 
 // ── Agent-to-Agent Task Routing ───────────────────────────────
-// POST /api/tasks/:id/delegate — agent delegates a subtask to another agent
 app.post(apiRoute('/tasks/:id/delegate'), async (req, res) => {
   const { id } = req.params;
   const task = taskCache.find(t => t.id === id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (task.status !== 'EXECUTING') return res.status(400).json({ error: 'Task must be in EXECUTING state' });
-
   const { title, description, assignedAgent, reward } = req.body;
   if (!title || !assignedAgent) return res.status(400).json({ error: 'title and assignedAgent required' });
-
   const subtaskAgent = agents.find(a => a.id === assignedAgent);
   if (!subtaskAgent) return res.status(404).json({ error: 'Agent not found' });
-
   if (!task.subtasks) task.subtasks = [];
-
-  const subtask = {
-    id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    title,
-    description: description || '',
-    reward: parseFloat(reward) || 0,
-    assignedAgent,
-    status: 'PENDING',
-    parentTaskId: id,
-    createdAt: new Date().toISOString(),
-    result: null,
-  };
-
+  const subtask = { id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, title, description: description || '', reward: parseFloat(reward) || 0, assignedAgent, status: 'PENDING', parentTaskId: id, createdAt: new Date().toISOString(), result: null };
   task.subtasks.push(subtask);
-  console.log(`  → [Routing] Subtask "${subtask.title}" delegated to ${subtaskAgent.name}`);
+  logger.info({ subtaskId: subtask.id, taskId: id, assignedTo: subtaskAgent.name }, 'Subtask delegated');
   res.status(201).json(subtask);
 });
 
-// POST /api/tasks/:id/subtasks/:subId/execute — execute a subtask
 app.post(apiRoute('/tasks/:id/subtasks/:subId/execute'), async (req, res) => {
   const { id, subId } = req.params;
   const task = taskCache.find(t => t.id === id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
-
   const subtask = task.subtasks?.find(s => s.id === subId);
   if (!subtask) return res.status(404).json({ error: 'Subtask not found' });
   if (subtask.status !== 'PENDING') return res.status(400).json({ error: 'Subtask not PENDING' });
-
   const { output, summary } = req.body;
   subtask.status = 'COMPLETED';
   subtask.completedAt = new Date().toISOString();
   subtask.result = { output: output || '', summary: summary || 'Subtask completed' };
-
-  // Check if all subtasks complete → mark parent done
   const allDone = task.subtasks.every(s => s.status === 'COMPLETED');
-  if (allDone && task.status === 'EXECUTING') {
-    task.status = 'PENDING'; // auto-execution will pick it up
-  }
-
-  console.log(`  → [Routing] Subtask "${subtask.title}" completed`);
+  if (allDone && task.status === 'EXECUTING') task.status = 'PENDING';
+  logger.info({ subtaskId: subId, taskId: id }, 'Subtask completed');
   res.json(subtask);
 });
 
-// GET /api/tasks/:id/subtasks — list subtasks
 app.get(apiRoute('/tasks/:id/subtasks'), (req, res) => {
   const { id } = req.params;
   const task = taskCache.find(t => t.id === id);
@@ -653,24 +959,49 @@ app.get(apiRoute('/tasks/:id/subtasks'), (req, res) => {
 
 // ── Start Server ─────────────────────────────────────────────
 
-bridge.init().then(() => {
+let serverInstance;
+const appReady = new Promise((resolve) => {
+  app.once('ready', resolve);
+});
+
+async function start() {
+  await initRedis();
+  await bridge.init(logger);
+
+  if (bridge.isMockMode() && process.env.GENLAYER_MODE === 'real') {
+    const msg = 'FATAL: bridge.init() failed to connect to GenLayer — deployment cannot proceed without a real contract. Check GENLAYER_CONTRACT_ADDRESS and GENLAYER_NETWORK.';
+    logger.fatal({ contractAddress: process.env.GENLAYER_CONTRACT_ADDRESS, network: process.env.GENLAYER_NETWORK }, msg);
+    process.exit(1);
+  }
+
   const modeLabel = bridge.isMockMode() ? 'Mock Onchain Mode' : 'GenLayer Live Mode';
-  console.log(`  → Bridge mode: ${modeLabel}`);
+  logger.info({ mode: modeLabel }, 'Bridge initialized');
   if (bridge.isMockMode()) {
     taskCache.push(...seedTasks);
   }
-}).catch(err => {
-  console.error('  → Bridge init failed:', err.message);
-});
 
-if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
-    const modeLabel = bridge.isMockMode() ? 'Mock Onchain Mode' : 'GenLayer Live';
-    console.log(`\n  ⚡ Orbitjob Backend [${modeLabel}]`);
-    console.log(`  → http://localhost:${PORT}`);
-    console.log(`  → ${taskCache.length} tasks | ${agents.length} agents`);
-    console.log();
-  });
+  if (bridge.isMockMode()) {
+    logger.warn('Running in mock mode — no real GenLayer connection established');
+  } else {
+    logger.info(`Connected to ${bridge.getNetworkName()} — Task count: ${taskCache.length}`);
+  }
+
+  if (!process.env.VERCEL) {
+    serverInstance = app.listen(PORT, () => {
+      logger.info({ port: PORT, mode: modeLabel, tasks: taskCache.length, agents: agents.length }, 'Server started');
+      app.emit('ready');
+    });
+  } else {
+    app.emit('ready');
+  }
 }
 
+start().catch(err => {
+  logger.fatal({ err }, 'Failed to start server');
+  process.exit(1);
+});
+
 module.exports = app;
+module.exports.appReady = appReady;
+module.exports.closeServer = () => serverInstance?.close();
+module.exports.getRedisClient = getRedisClient;
