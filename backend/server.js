@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const dotenvSafe = require('dotenv-safe');
 const path = require('path');
+const { z } = require('zod');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const pino = require('pino');
@@ -23,6 +24,95 @@ const logger = pino({
     transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } },
   }),
 });
+
+// ── Input Validation Schemas ──────────────────────────────────
+const taskCreateSchema = z.object({
+  title: z.string().min(1).max(500),
+  description: z.string().min(1).max(5000),
+  constraints: z.string().max(2000).optional().default(''),
+  reward: z.coerce.number().min(0).max(1_000_000).optional().default(0),
+  deadline: z.string().datetime().nullable().optional(),
+  assignedAgent: z.string().optional(),
+  creator: z.string().optional(),
+});
+
+const taskUpdateSchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  description: z.string().min(1).max(5000).optional(),
+  constraints: z.string().max(2000).optional(),
+  reward: z.coerce.number().min(0).max(1_000_000).optional(),
+  deadline: z.string().datetime().nullable().optional(),
+  assignedAgent: z.string().optional(),
+});
+
+const agentCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().min(1).max(2000),
+  model: z.string().max(200).optional(),
+  specialty: z.string().max(200).optional(),
+  icon: z.string().max(50).optional(),
+  price: z.coerce.number().min(0).max(10_000).optional(),
+  useCases: z.array(z.string()).optional(),
+  selectedSkills: z.array(z.string()).optional(),
+});
+
+const agentUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().min(1).max(2000).optional(),
+  model: z.string().max(200).optional(),
+  specialty: z.string().max(200).optional(),
+  icon: z.string().max(50).optional(),
+  price: z.coerce.number().min(0).max(10_000).optional(),
+  useCases: z.array(z.string()).optional(),
+});
+
+const skillCreateSchema = z.object({
+  id: z.string().min(1).max(100),
+  label: z.string().min(1).max(200),
+  description: z.string().max(1000).optional(),
+  promptDirective: z.string().max(2000).optional(),
+});
+
+const skillUpdateSchema = z.object({
+  label: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional(),
+  promptDirective: z.string().max(2000).optional(),
+});
+
+const faucetSchema = z.object({
+  address: z.string().min(1).max(100),
+});
+
+const transferSchema = z.object({
+  from: z.string().min(1).max(100),
+  to: z.string().min(1).max(100),
+  amount: z.coerce.number().positive(),
+});
+
+function validate(schema) {
+  return (req, res, next) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      const errors = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`);
+      return res.status(400).json({ error: 'Validation failed', details: errors });
+    }
+    req.validatedBody = result.data;
+    next();
+  };
+}
+
+// ── Auth Middleware ───────────────────────────────────────────
+const isTestMode = process.env.NODE_ENV === 'test';
+
+async function requireAuth(req, res, next) {
+  if (isTestMode) return next();
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Authentication required' });
+  const session = await getSession(token);
+  if (!session) return res.status(401).json({ error: 'Invalid or expired token' });
+  req.session = session;
+  next();
+}
 
 const app = express();
 const PORT = process.env.PORT || 5005;
@@ -75,8 +165,25 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── General API rate limiter ──
-const apiLimiter = rateLimit({
+// ── Rate Limiters (lazy Redis store) ──
+let rateLimitersInitialized = false;
+
+function createLazyLimiter(options) {
+  let limiter = null;
+  return (req, res, next) => {
+    if (!limiter) {
+      let store;
+      if (redis) {
+        const { default: RedisStore } = require('rate-limit-redis');
+        store = new RedisStore({ sendCommand: (...args) => redis.call(...args) });
+      }
+      limiter = rateLimit({ ...options, store });
+    }
+    return limiter(req, res, next);
+  };
+}
+
+const apiLimiter = createLazyLimiter({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000,
   max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 200,
   standardHeaders: true,
@@ -85,8 +192,7 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
-// ── Stricter rate limiter for auth endpoints ──
-const authLimiter = rateLimit({
+const authLimiter = createLazyLimiter({
   windowMs: 60000,
   max: 10,
   standardHeaders: true,
@@ -95,8 +201,7 @@ const authLimiter = rateLimit({
 });
 app.use(['/api/auth', '/auth'], authLimiter);
 
-// ── Stricter rate limiter for execute endpoint ──
-const executeLimiter = rateLimit({
+const executeLimiter = createLazyLimiter({
   windowMs: 30000,
   max: 5,
   standardHeaders: true,
@@ -141,8 +246,22 @@ const swaggerSpec = swaggerJsdoc({
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/api/docs.json', (req, res) => res.json(swaggerSpec));
 
-app.get('/healthz', (req, res) => {
-  res.json({ status: 'ok', mode: bridge.isMockMode() ? 'mock' : 'live', uptime: process.uptime() });
+app.get('/healthz', async (req, res) => {
+  let redisStatus = 'unavailable';
+  if (redisAvailable) {
+    try {
+      await redis.ping();
+      redisStatus = 'connected';
+    } catch {
+      redisStatus = 'error';
+    }
+  }
+  res.json({
+    status: 'ok',
+    mode: bridge.isMockMode() ? 'mock' : 'live',
+    uptime: process.uptime(),
+    redis: redisStatus,
+  });
 });
 
 app.get('/metrics', async (req, res) => {
@@ -272,11 +391,41 @@ let agents = [
 
 // ── Auth (Sign in with Ethereum / GenLayer) ────────────────────
 const { ethers } = require('ethers');
+const crypto = require('crypto');
 let sessions = {};
+
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+
+function generateToken(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [header, body, signature] = token.split('.');
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    if (signature !== expectedSig) return null;
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (payload.exp && Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 function getRedisClient() { return redis; }
 
 async function getSession(tokenOrAddress) {
+  // If it's a JWT token, verify and return it statelessly
+  const decoded = verifyToken(tokenOrAddress);
+  if (decoded) {
+    return { address: decoded.address, signedInAt: decoded.signedInAt || Date.now() };
+  }
+
+  // Fallback to Redis or in-memory session store
   if (redisAvailable) {
     const data = await redis.get(`session:${tokenOrAddress}`);
     return data ? JSON.parse(data) : null;
@@ -354,19 +503,46 @@ app.get(['/api/auth/challenge', '/auth/challenge'], async (req, res) => {
  *         description: Invalid signature
  */
 app.post(['/api/auth/signin', '/auth/signin'], async (req, res) => {
-  const { address, signature } = req.body;
+  const { address, signature, nonce } = req.body;
   if (!address || !signature) return res.status(400).json({ error: 'Address and signature required' });
-  const session = await getSession(address.toLowerCase());
-  if (!session || Date.now() > session.expiresAt) return res.status(401).json({ error: 'Challenge expired, request a new one' });
+
+  let activeNonce = nonce;
+  if (!activeNonce) {
+    const session = await getSession(address.toLowerCase());
+    if (!session || Date.now() > session.expiresAt) return res.status(401).json({ error: 'Challenge expired, request a new one' });
+    activeNonce = session.nonce;
+    await delSession(address.toLowerCase());
+  } else {
+    // Stateless cryptographic validation of nonce
+    const addressMatch = activeNonce.match(/Address:\s*(0x[a-fA-F0-9]+)/i);
+    if (!addressMatch || addressMatch[1].toLowerCase() !== address.toLowerCase()) {
+      return res.status(400).json({ error: 'Invalid challenge address constraint' });
+    }
+    const nonceMatch = activeNonce.match(/Nonce:\s*(\d+)/i);
+    if (!nonceMatch) {
+      return res.status(400).json({ error: 'Invalid challenge timestamp format' });
+    }
+    const timestamp = parseInt(nonceMatch[1], 10);
+    const age = Date.now() - timestamp;
+    if (age < 0 || age > 300000) { // 5 minutes validity
+      return res.status(401).json({ error: 'Challenge expired, request a new one' });
+    }
+  }
+
   try {
-    const recovered = ethers.verifyMessage(session.nonce, signature);
+    const recovered = ethers.verifyMessage(activeNonce, signature);
     if (recovered.toLowerCase() !== address.toLowerCase()) return res.status(401).json({ error: 'Signature does not match address' });
   } catch {
     return res.status(401).json({ error: 'Invalid signature' });
   }
-  await delSession(address.toLowerCase());
-  const token = uuidv4();
-  await setSession(token, { address: address.toLowerCase(), signedInAt: Date.now() });
+
+  // Generate stateless JWT token (valid for 24h)
+  const token = generateToken({
+    address: address.toLowerCase(),
+    signedInAt: Date.now(),
+    exp: Date.now() + 24 * 60 * 60 * 1000
+  });
+
   res.json({ token, address: address.toLowerCase(), message: 'Signed in successfully' });
 });
 
@@ -408,11 +584,22 @@ app.get(apiRoute('/auth/me'), async (req, res) => {
  *       401:
  *         description: Not authenticated
  */
-app.post(['/api/auth/refresh', '/auth/refresh'], async (req, res) => {
+app.post(['/api/auth/refresh', '/api/auth/refresh'], async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   const session = await getSession(token);
   if (!session) return res.status(401).json({ error: 'Not authenticated' });
+
+  const decoded = verifyToken(token);
+  if (decoded) {
+    const newToken = generateToken({
+      address: decoded.address,
+      signedInAt: Date.now(),
+      exp: Date.now() + 24 * 60 * 60 * 1000
+    });
+    return res.json({ token: newToken, message: 'Token refreshed' });
+  }
+
   await setSession(token, session);
   res.json({ token, message: 'Token refreshed' });
 });
@@ -484,9 +671,8 @@ app.get(apiRoute('/skills'), (req, res) => {
  *       409:
  *         description: Duplicate
  */
-app.post(apiRoute('/skills'), (req, res) => {
-  const { id, label, description, promptDirective } = req.body;
-  if (!id || !label) return res.status(400).json({ error: 'id and label are required' });
+app.post(apiRoute('/skills'), requireAuth, validate(skillCreateSchema), (req, res) => {
+  const { id, label, description, promptDirective } = req.validatedBody;
   const skills = getSkills();
   if (skills.find(s => s.id === id)) return res.status(409).json({ error: 'Skill already exists' });
   const newSkill = { id, label, description: description || '', promptDirective: promptDirective || '' };
@@ -495,11 +681,11 @@ app.post(apiRoute('/skills'), (req, res) => {
   res.status(201).json(newSkill);
 });
 
-app.put(apiRoute('/skills/:id'), (req, res) => {
+app.put(apiRoute('/skills/:id'), requireAuth, validate(skillUpdateSchema), (req, res) => {
   const skills = getSkills();
   const skill = skills.find(s => s.id === req.params.id);
   if (!skill) return res.status(404).json({ error: 'Skill not found' });
-  const { label, description, promptDirective } = req.body;
+  const { label, description, promptDirective } = req.validatedBody;
   if (label) skill.label = label;
   if (description !== undefined) skill.description = description;
   if (promptDirective !== undefined) skill.promptDirective = promptDirective;
@@ -507,7 +693,7 @@ app.put(apiRoute('/skills/:id'), (req, res) => {
   res.json(skill);
 });
 
-app.delete(apiRoute('/skills/:id'), (req, res) => {
+app.delete(apiRoute('/skills/:id'), requireAuth, (req, res) => {
   const skills = getSkills();
   const idx = skills.findIndex(s => s.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Skill not found' });
@@ -595,10 +781,10 @@ app.get(apiRoute('/tasks/:id'), (req, res) => {
   res.json(task);
 });
 
-app.put(apiRoute('/tasks/:id'), (req, res) => {
+app.put(apiRoute('/tasks/:id'), requireAuth, validate(taskUpdateSchema), (req, res) => {
   const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  const { title, description, constraints, reward, deadline, assignedAgent } = req.body;
+  const { title, description, constraints, reward, deadline, assignedAgent } = req.validatedBody;
   if (title) task.title = title;
   if (description) task.description = description;
   if (constraints !== undefined) task.constraints = constraints;
@@ -608,7 +794,7 @@ app.put(apiRoute('/tasks/:id'), (req, res) => {
   res.json(task);
 });
 
-app.delete(apiRoute('/tasks/:id'), (req, res) => {
+app.delete(apiRoute('/tasks/:id'), requireAuth, (req, res) => {
   const idx = taskCache.findIndex(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (idx === -1) return res.status(404).json({ error: 'Task not found' });
   const removed = taskCache.splice(idx, 1)[0];
@@ -639,11 +825,8 @@ app.delete(apiRoute('/tasks/:id'), (req, res) => {
  *       201:
  *         description: Created
  */
-app.post(apiRoute('/tasks'), async (req, res) => {
-  const { title, description, constraints, reward, deadline, assignedAgent } = req.body;
-  if (!title || !description) {
-    return res.status(400).json({ error: 'Title and description are required' });
-  }
+app.post(apiRoute('/tasks'), requireAuth, validate(taskCreateSchema), async (req, res) => {
+  const { title, description, constraints, reward, deadline, assignedAgent, creator } = req.validatedBody;
   const receipt = await bridge.postTask(title, description, Math.floor(reward) || 0, constraints || '', deadline || '');
   const agentObj = agents.find(a => a.id === assignedAgent) || agents[0];
   const newTask = {
@@ -662,7 +845,7 @@ app.post(apiRoute('/tasks'), async (req, res) => {
     txId: receipt.txId,
     blockNumber: receipt.blockNumber,
     subtasks: [],
-    creator: req.body.creator || null,
+    creator: creator || null,
   };
   taskCache.push(newTask);
   res.status(201).json(newTask);
@@ -689,7 +872,7 @@ const OPENROUTER_MODEL = 'qwen/qwen-2.5-coder:free';
  *       404:
  *         description: Task not found
  */
-app.post(apiRoute('/tasks/:id/execute'), async (req, res) => {
+app.post(apiRoute('/tasks/:id/execute'), requireAuth, async (req, res) => {
   const { id } = req.params;
   const taskIndex = taskCache.findIndex(t => t.id === id);
   if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
@@ -833,9 +1016,8 @@ app.get(apiRoute('/agents/:id'), (req, res) => {
   res.json(agent);
 });
 
-app.post(apiRoute('/agents'), (req, res) => {
-  const { name, model, specialty, icon, price, description, useCases, selectedSkills } = req.body;
-  if (!name || !description) return res.status(400).json({ error: 'Name and description are required' });
+app.post(apiRoute('/agents'), requireAuth, validate(agentCreateSchema), (req, res) => {
+  const { name, model, specialty, icon, price, description, useCases, selectedSkills } = req.validatedBody;
   const accent = accentColors[agents.length % accentColors.length];
   const newAgent = {
     id: uuidv4(), name, model: model || 'qwen/qwen-2.5-coder:free', specialty: specialty || 'General',
@@ -847,10 +1029,10 @@ app.post(apiRoute('/agents'), (req, res) => {
   res.status(201).json(newAgent);
 });
 
-app.put(apiRoute('/agents/:id'), (req, res) => {
+app.put(apiRoute('/agents/:id'), requireAuth, validate(agentUpdateSchema), (req, res) => {
   const idx = agents.findIndex(a => a.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
-  const { name, model, specialty, icon, price, description, useCases } = req.body;
+  const { name, model, specialty, icon, price, description, useCases } = req.validatedBody;
   if (name) agents[idx].name = name;
   if (model) agents[idx].model = model;
   if (specialty) agents[idx].specialty = specialty;
@@ -861,7 +1043,7 @@ app.put(apiRoute('/agents/:id'), (req, res) => {
   res.json(agents[idx]);
 });
 
-app.delete(apiRoute('/agents/:id'), (req, res) => {
+app.delete(apiRoute('/agents/:id'), requireAuth, (req, res) => {
   const idx = agents.findIndex(a => a.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
   const removed = agents.splice(idx, 1)[0];
@@ -895,18 +1077,16 @@ app.get(apiRoute('/balances/:address'), (req, res) => {
   res.json({ address: req.params.address, balance });
 });
 
-app.post(apiRoute('/faucet'), (req, res) => {
-  const { address } = req.body;
-  if (!address) return res.status(400).json({ error: 'Address required' });
+app.post(apiRoute('/faucet'), validate(faucetSchema), (req, res) => {
+  const { address } = req.validatedBody;
   ensureBalance(address);
   balances[address] += 1000;
   logger.info({ address, amount: 1000 }, 'Faucet claimed');
   res.json({ address, balance: balances[address], message: '1000 GLR claimed' });
 });
 
-app.post(apiRoute('/transfer'), (req, res) => {
-  const { from, to, amount } = req.body;
-  if (!from || !to || !amount) return res.status(400).json({ error: 'from, to, and amount required' });
+app.post(apiRoute('/transfer'), validate(transferSchema), (req, res) => {
+  const { from, to, amount } = req.validatedBody;
   ensureBalance(from); ensureBalance(to);
   const amt = parseFloat(amount);
   if (balances[from] < amt) return res.status(400).json({ error: 'Insufficient balance' });
@@ -1000,6 +1180,38 @@ start().catch(err => {
   logger.fatal({ err }, 'Failed to start server');
   process.exit(1);
 });
+
+// ── Graceful Shutdown ─────────────────────────────────────────
+let isShuttingDown = false;
+
+async function shutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  logger.info({ signal }, 'Graceful shutdown initiated');
+
+  if (serverInstance) {
+    serverInstance.close(() => {
+      logger.info('HTTP server closed');
+    });
+  }
+
+  if (redis) {
+    try {
+      await redis.quit();
+      logger.info('Redis connection closed');
+    } catch (err) {
+      logger.warn({ err }, 'Error closing Redis connection');
+    }
+  }
+
+  setTimeout(() => {
+    logger.warn('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 module.exports = app;
 module.exports.appReady = appReady;

@@ -216,7 +216,7 @@ function App() {
       const challengeRes = await axios.get(`${API_BASE}/auth/challenge`, { params: { address } });
       const { nonce } = challengeRes.data;
       const signature = await signer.signMessage(nonce);
-      const signinRes = await axios.post(`${API_BASE}/auth/signin`, { address, signature });
+      const signinRes = await axios.post(`${API_BASE}/auth/signin`, { address, signature, nonce });
       const { token } = signinRes.data;
 
       // Fetch GLR balance from backend faucet system instead of ETH balance

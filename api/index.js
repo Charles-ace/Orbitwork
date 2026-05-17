@@ -101,8 +101,37 @@ let ready = bridge.init().then(() => {
 }).catch(err => console.error('Bridge init failed:', err.message));
 let agents = db.loadAgents(seedAgents);
 
-// ── Auth Sessions ──
+// ── Auth Sessions & JWT Cryptographic Stateless Auth ──
 let sessions = {};
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_default_secret_please_change_this_for_production';
+
+function generateToken(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = require('crypto').createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [header, body, signature] = token.split('.');
+    const expectedSig = require('crypto').createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    if (signature !== expectedSig) return null;
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (payload.exp && Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+async function getSession(tokenOrAddress) {
+  const decoded = verifyToken(tokenOrAddress);
+  if (decoded) {
+    return { address: decoded.address, signedInAt: decoded.signedInAt || Date.now() };
+  }
+  return sessions[tokenOrAddress] || null;
+}
 
 // ── Helpers ──
 const accentColors = ['purple', 'blue', 'green', 'orange', 'red', 'cyan'];
@@ -173,28 +202,57 @@ module.exports = async (req, res) => {
 
     // POST /api/auth/signin
     if (req.method === 'POST' && base === 'auth/signin') {
-      const { address, signature } = await parseBody(req);
+      const { address, signature, nonce } = await parseBody(req);
       if (!address || !signature) return send(res, 400, { error: 'Address and signature required' });
-      const session = sessions[address.toLowerCase()];
-      if (!session || Date.now() > session.expiresAt) return send(res, 401, { error: 'Challenge expired, request a new one' });
+
+      let activeNonce = nonce;
+      if (!activeNonce) {
+        const session = sessions[address.toLowerCase()];
+        if (!session || Date.now() > session.expiresAt) return send(res, 401, { error: 'Challenge expired, request a new one' });
+        activeNonce = session.nonce;
+        delete sessions[address.toLowerCase()];
+      } else {
+        // Stateless cryptographic validation of nonce
+        const addressMatch = activeNonce.match(/Address:\s*(0x[a-fA-F0-9]+)/i);
+        if (!addressMatch || addressMatch[1].toLowerCase() !== address.toLowerCase()) {
+          return send(res, 400, { error: 'Invalid challenge address constraint' });
+        }
+        const nonceMatch = activeNonce.match(/Nonce:\s*(\d+)/i);
+        if (!nonceMatch) {
+          return send(res, 400, { error: 'Invalid challenge timestamp format' });
+        }
+        const timestamp = parseInt(nonceMatch[1], 10);
+        const age = Date.now() - timestamp;
+        if (age < 0 || age > 300000) { // 5 minutes validity
+          return send(res, 401, { error: 'Challenge expired, request a new one' });
+        }
+      }
+
       try {
-        const recovered = ethers.utils.verifyMessage(session.nonce, signature);
+        const recovered = ethers.utils.verifyMessage(activeNonce, signature);
         if (recovered.toLowerCase() !== address.toLowerCase()) return send(res, 401, { error: 'Signature does not match address' });
       } catch {
         return send(res, 401, { error: 'Invalid signature' });
       }
-      delete sessions[address.toLowerCase()];
-      const token = randomUUID();
-      sessions[token] = { address: address.toLowerCase(), signedInAt: Date.now() };
+
+      // Generate stateless JWT token (valid for 24h)
+      const token = generateToken({
+        address: address.toLowerCase(),
+        signedInAt: Date.now(),
+        exp: Date.now() + 24 * 60 * 60 * 1000
+      });
+
       return send(res, 200, { token, address: address.toLowerCase(), message: 'Signed in successfully' });
     }
 
     // GET /api/auth/me
     if (req.method === 'GET' && base === 'auth/me') {
       const authHeader = req.headers.authorization || '';
-      const token = authHeader.replace('Bearer ', '');
-      if (!token || !sessions[token]) return send(res, 401, { error: 'Not authenticated' });
-      return send(res, 200, { address: sessions[token].address });
+      const token = authHeader.replace('Bearer ', '').trim();
+      if (!token) return send(res, 401, { error: 'Not authenticated' });
+      const session = await getSession(token);
+      if (!session) return send(res, 401, { error: 'Not authenticated' });
+      return send(res, 200, { address: session.address });
     }
 
     // ── Skills Routes ──

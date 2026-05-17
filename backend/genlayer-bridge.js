@@ -92,16 +92,19 @@ async function init(customLogger) {
   const mode = process.env.GENLAYER_MODE || 'mock';
 
   if (contractAddress && mode === 'real') {
-    logger().info({ contractAddress, network: process.env.GENLAYER_NETWORK }, 'Initializing GenLayer Bridge');
+    console.log(`\n  ⚡ Initializing GenLayer Bridge...`);
+    console.log(`  → Contract: ${contractAddress}`);
     const ok = await initRealBridge();
     if (ok) {
       mockMode = false;
-      logger().info({ network: networkName }, `${networkName} mode active`);
+      console.log(`  → ${networkName} mode active`);
+    } else {
+      throw new Error(`Failed to initialize GenLayer Bridge in real mode on ${networkName}. Check your GENLAYER_CONTRACT_ADDRESS, private keys, or RPC status.`);
     }
   }
 
   if (mockMode) {
-    logger().info({ contractAddress: contractAddress || 'none' }, 'Mock Bridge active');
+    console.log(`  → Mock Bridge active (contract: ${contractAddress || 'none'})`);
   }
 }
 
