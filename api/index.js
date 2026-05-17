@@ -4,9 +4,9 @@ const path = require('path');
 const axios = require('axios');
 const { ethers } = require('ethers');
 const db = require('./db');
-const bridge = require('../backend/genlayer-bridge');
 
-bridge.init().catch(err => console.error('Bridge init failed:', err.message));
+// Will be imported dynamically at runtime from our ES Module
+let bridge = null;
 
 // ── Skills Loader (cache at init) ──
 const SKILLS_FILE = path.join(__dirname, '..', 'docs', 'expert-skills.md');
@@ -93,12 +93,31 @@ const seedAgents = [
 // ── Persistent Storage ──
 let taskCache = [];
 
-let ready = bridge.init().then(() => {
+let ready = (async () => {
+  // Dynamically import the ES Module bridge located in the same directory!
+  bridge = await import('./genlayer-bridge.mjs');
+  await bridge.init();
   if (bridge.isMockMode()) {
     taskCache.push(...seedTasks);
     db.setTasks(taskCache);
   }
-}).catch(err => console.error('Bridge init failed:', err.message));
+})().catch(err => {
+  console.error('ESM Bridge init failed:', err.message, err.stack);
+  // Safe mock bridge fallback with error diagnostic reporting
+  bridge = {
+    isMockMode: () => true,
+    getNetworkName: () => 'studionet',
+    getContractAddress: () => process.env.GENLAYER_CONTRACT_ADDRESS,
+    getInitError: () => err.message + '\n' + (err.stack || ''),
+    getLedger: () => [],
+    getTaskCount: async () => 0,
+    postTask: async () => 'tx_error_fallback',
+    submitExecution: async () => 'tx_error_fallback',
+    getOnchainTask: async () => null,
+  };
+  taskCache.push(...seedTasks);
+  db.setTasks(taskCache);
+});
 let agents = db.loadAgents(seedAgents);
 
 // ── Auth Sessions & JWT Cryptographic Stateless Auth ──
