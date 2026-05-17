@@ -33,12 +33,13 @@ async function initRealBridge() {
 
     realClient = createClient({ chain });
 
+    // Use get_task_count to match deployed contract
     const counter = await realClient.readContract({
       address: contractAddress,
-      functionName: 'get_task_counter',
+      functionName: 'get_task_count',
       args: [],
     });
-    console.log(`  → [GenLayer Bridge] Connected to ${network}. Task counter: ${counter}`);
+    console.log(`  → [GenLayer Bridge] Connected to ${network}. Task count: ${counter}`);
 
     const privateKey = process.env.GENLAYER_PRIVATE_KEY || null;
     const accountStr = process.env.GENLAYER_ACCOUNT_ADDRESS || null;
@@ -99,17 +100,18 @@ async function init() {
   }
 
   if (mockMode) {
-    console.log(`  → Mock Bridge active`);
+    console.log(`  → Mock Bridge active (contract: ${contractAddress || 'none'})`);
   }
 }
 
+// Deployed contract signature: post_task(title: str, description: str, reward: str) -> None
 async function postTask(title, description, reward, constraints, deadline) {
   if (!mockMode && writeClient) {
     const { TransactionStatus, ExecutionResult } = await import('genlayer-js/types');
     const txHash = await writeClient.writeContract({
       address: contractAddress,
       functionName: 'post_task',
-      args: [title, description, Math.floor(reward), constraints || '', deadline || ''],
+      args: [title, description, String(Math.floor(reward || 0))],
       value: BigInt(0),
     });
     const receipt = await writeClient.waitForTransactionReceipt({
@@ -123,7 +125,7 @@ async function postTask(title, description, reward, constraints, deadline) {
     }
     const taskCounter = await realClient.readContract({
       address: contractAddress,
-      functionName: 'get_task_counter',
+      functionName: 'get_task_count',
       args: [],
     });
     return {
@@ -147,13 +149,14 @@ async function postTask(title, description, reward, constraints, deadline) {
   return receipt;
 }
 
+// Deployed contract signature: submit_execution(task_id: str, output: str, agent_id: str) -> None
 async function submitExecution(contractTaskId, output, reasoning, confidence, agentId) {
   if (!mockMode && writeClient) {
     const { TransactionStatus, ExecutionResult } = await import('genlayer-js/types');
     const txHash = await writeClient.writeContract({
       address: contractAddress,
       functionName: 'submit_execution',
-      args: [contractTaskId, output, reasoning, confidence, agentId],
+      args: [String(contractTaskId), output || '', agentId || 'agent-default'],
       value: BigInt(0),
     });
     const receipt = await writeClient.waitForTransactionReceipt({
@@ -186,7 +189,7 @@ async function getTaskCount() {
     try {
       const result = await realClient.readContract({
         address: contractAddress,
-        functionName: 'get_task_counter',
+        functionName: 'get_task_count',
         args: [],
       });
       return Number(result);
@@ -198,12 +201,24 @@ async function getTaskCount() {
 async function getOnchainTask(taskId) {
   if (!mockMode && realClient) {
     try {
-      const result = await realClient.readContract({
-        address: contractAddress,
-        functionName: 'get_task',
-        args: [taskId],
-      });
-      return result;
+      const [title, status, output] = await Promise.all([
+        realClient.readContract({
+          address: contractAddress,
+          functionName: 'get_task_title',
+          args: [String(taskId)],
+        }),
+        realClient.readContract({
+          address: contractAddress,
+          functionName: 'get_task_status',
+          args: [String(taskId)],
+        }),
+        realClient.readContract({
+          address: contractAddress,
+          functionName: 'get_task_output',
+          args: [String(taskId)],
+        }),
+      ]);
+      return { title, status, output };
     } catch { return null; }
   }
   return null;
