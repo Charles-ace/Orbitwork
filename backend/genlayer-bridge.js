@@ -26,25 +26,10 @@ async function initRealBridge() {
   const network = (process.env.GENLAYER_NETWORK || 'localnet').toLowerCase();
   networkName = network;
 
-  // Studionet/testnets don't support external SDK RPC — contract lives in Studio web UI
-  if (network !== 'localnet') {
-    console.log(`  → [GenLayer Bridge] ${network} detected — SDK RPC not supported`);
-    console.log(`  → [GenLayer Bridge] Contract ${contractAddress} is deployed on ${network}`);
-    console.log(`  → [GenLayer Bridge] Interact via Studio web UI (https://studio.genlayer.com)`);
-    console.log(`  → [GenLayer Bridge] Backend stays in mock mode; onchain state is managed in Studio`);
-    return true;
-  }
-
   try {
     const { createClient, createAccount } = await import('genlayer-js');
-    const { localnet } = await import('genlayer-js/chains');
 
-    let chain = localnet;
-
-    const rpcUrl = process.env.GENLAYER_RPC_URL;
-    if (rpcUrl) {
-      chain = { ...chain, rpc: { default: rpcUrl } };
-    }
+    const chain = await buildChainConfig(network);
 
     realClient = createClient({ chain });
 
@@ -53,7 +38,7 @@ async function initRealBridge() {
       functionName: 'get_task_counter',
       args: [],
     });
-    console.log(`  → [GenLayer Bridge] Connected to localnet. Task counter: ${counter}`);
+    console.log(`  → [GenLayer Bridge] Connected to ${network}. Task counter: ${counter}`);
 
     const privateKey = process.env.GENLAYER_PRIVATE_KEY || null;
     const accountStr = process.env.GENLAYER_ACCOUNT_ADDRESS || null;
@@ -77,6 +62,28 @@ async function initRealBridge() {
   }
 }
 
+async function buildChainConfig(network) {
+  try {
+    const chainsModule = await import('genlayer-js/chains');
+    const known = chainsModule?.[network] || chainsModule?.chains?.[network];
+    if (known) return { ...known };
+  } catch {}
+
+  const rpcUrl = process.env.GENLAYER_RPC_URL;
+  const rpcMap = {
+    localnet: 'http://127.0.0.1:8545',
+    bradbury: 'https://bradbury.genlayer.net',
+    testnet: 'https://testnet.genlayer.net',
+    mainnet: 'https://mainnet.genlayer.net',
+  };
+
+  return {
+    id: 61123n,
+    name: network,
+    rpc: { default: rpcUrl || rpcMap[network] || `https://${network}.genlayer.net` },
+  };
+}
+
 async function init() {
   contractAddress = process.env.GENLAYER_CONTRACT_ADDRESS || null;
   const mode = process.env.GENLAYER_MODE || 'mock';
@@ -87,7 +94,7 @@ async function init() {
     const ok = await initRealBridge();
     if (ok) {
       mockMode = false;
-      console.log(`  → ${networkName === 'localnet' ? 'Live' : 'Studio'} mode active`);
+      console.log(`  → ${networkName} mode active`);
     }
   }
 
@@ -97,7 +104,7 @@ async function init() {
 }
 
 async function postTask(title, description, reward, constraints, deadline) {
-  if (!mockMode && writeClient && networkName === 'localnet') {
+  if (!mockMode && writeClient) {
     const { TransactionStatus, ExecutionResult } = await import('genlayer-js/types');
     const txHash = await writeClient.writeContract({
       address: contractAddress,
@@ -141,7 +148,7 @@ async function postTask(title, description, reward, constraints, deadline) {
 }
 
 async function submitExecution(contractTaskId, output, reasoning, confidence, agentId) {
-  if (!mockMode && writeClient && networkName === 'localnet') {
+  if (!mockMode && writeClient) {
     const { TransactionStatus, ExecutionResult } = await import('genlayer-js/types');
     const txHash = await writeClient.writeContract({
       address: contractAddress,
@@ -189,7 +196,7 @@ async function getTaskCount() {
 }
 
 async function getOnchainTask(taskId) {
-  if (!mockMode && realClient && networkName === 'localnet') {
+  if (!mockMode && realClient) {
     try {
       const result = await realClient.readContract({
         address: contractAddress,
@@ -210,4 +217,7 @@ module.exports = {
   getOnchainTask,
   isMockMode: () => mockMode,
   getLedger: () => mockLedger,
+  getNetworkName: () => networkName,
+  getContractAddress: () => contractAddress,
+  buildChainConfig,
 };

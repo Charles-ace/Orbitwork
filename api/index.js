@@ -4,6 +4,9 @@ const path = require('path');
 const axios = require('axios');
 const { ethers } = require('ethers');
 const db = require('./db');
+const bridge = require('../backend/genlayer-bridge');
+
+bridge.init().catch(err => console.error('Bridge init failed:', err.message));
 
 // ── Skills Loader (cache at init) ──
 const SKILLS_FILE = path.join(__dirname, '..', 'docs', 'expert-skills.md');
@@ -42,54 +45,8 @@ function getSkills() {
   return skillsCache;
 }
 
-// ── Mock Onchain Bridge ──
-let mockContractId = 0;
-const mockLedger = [];
-
-function simLatency(ms = 2000) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function mockTx(type, data) {
-  const tx = {
-    txId: `tx_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    type,
-    data,
-    blockTimestamp: new Date().toISOString(),
-    blockNumber: Math.floor(Math.random() * 999999) + 1,
-  };
-  mockLedger.push(tx);
-  return tx;
-}
-
-async function mockPostTask(title, description, reward, constraints, deadline) {
-  await simLatency();
-  mockContractId++;
-  const receipt = {
-    txId: `tx_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    contractId: mockContractId,
-    status: 'FINALIZED',
-    blockNumber: Math.floor(Math.random() * 999999) + 1,
-  };
-  mockTx('post_task', { contractId: mockContractId, title, description, reward, constraints, deadline });
-  return receipt;
-}
-
-async function mockSubmitExecution(contractTaskId, output, reasoning, confidence, agentId) {
-  await simLatency();
-  const receipt = {
-    txId: `tx_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    status: 'FINALIZED',
-    verificationStatus: 'VERIFIED',
-    blockNumber: Math.floor(Math.random() * 999999) + 1,
-  };
-  mockTx('submit_execution', { contractTaskId, output, reasoning, confidence, agentId, verdict: 'VERIFIED' });
-  return receipt;
-}
-
-async function mockGetTaskCount() {
-  return mockContractId;
-}
+// ── Onchain Bridge ──
+// Uses shared genlayer-bridge from backend/ — falls back to mock when no contract configured
 
 // ── Seed Data ──
 const seedTasks = [
@@ -186,7 +143,12 @@ module.exports = async (req, res) => {
   try {
     // GET /api/
     if (req.method === 'GET' && (base === '' || base === 'index.js')) {
-      return send(res, 200, { status: 'Orbitjob backend running', mode: 'stable' });
+      return send(res, 200, {
+        status: 'Orbitjob backend running',
+        mode: bridge.isMockMode() ? 'mock' : 'live',
+        network: bridge.getNetworkName(),
+        contractAddress: bridge.getContractAddress(),
+      });
     }
 
     // ── Auth Routes ──
@@ -349,7 +311,7 @@ module.exports = async (req, res) => {
       const { title, description, constraints, reward, deadline, assignedAgent } = await parseBody(req);
       if (!title || !description) return send(res, 400, { error: 'Title and description are required' });
 
-      const receipt = await mockPostTask(title, description, Math.floor(reward) || 0, constraints || '', deadline || '');
+      const receipt = await bridge.postTask(title, description, Math.floor(reward) || 0, constraints || '', deadline || '');
       const agentObj = agents.find(a => a.id === assignedAgent) || agents[0];
 
       const newTask = {
@@ -470,7 +432,7 @@ The confidence score should reflect how well you believe you fulfilled the task.
         if (task.contractTaskId) {
           const outputStr = JSON.stringify(aiResult);
           const reasoningStr = JSON.stringify(reasoningTrace);
-          const bridgeReceipt = await mockSubmitExecution(task.contractTaskId, outputStr, reasoningStr, confidence, agent.id);
+          const bridgeReceipt = await bridge.submitExecution(task.contractTaskId, outputStr, reasoningStr, confidence, agent.id);
           task.verificationStatus = bridgeReceipt.verificationStatus;
           task.txId = bridgeReceipt.txId;
           task.blockNumber = bridgeReceipt.blockNumber;
@@ -559,6 +521,47 @@ The confidence score should reflect how well you believe you fulfilled the task.
       const removed = agents.splice(idx, 1)[0];
       db.setAgents(agents);
       return send(res, 200, { message: 'Agent removed', agent: removed });
+    }
+
+    // ── Payment / Token System ──
+    let balances = {};
+    function ensureBalance(address) {
+      if (!balances[address]) balances[address] = 0;
+      return balances[address];
+    }
+
+    // GET /api/balances
+    if (req.method === 'GET' && base === 'balances') {
+      return send(res, 200, Object.entries(balances).map(([address, balance]) => ({ address, balance })));
+    }
+
+    // GET /api/balances/:address
+    const balanceByAddr = base.match(/^balances\/(.+)$/);
+    if (req.method === 'GET' && balanceByAddr) {
+      const balance = ensureBalance(balanceByAddr[1]);
+      return send(res, 200, { address: balanceByAddr[1], balance });
+    }
+
+    // POST /api/faucet
+    if (req.method === 'POST' && base === 'faucet') {
+      const { address } = await parseBody(req);
+      if (!address) return send(res, 400, { error: 'Address required' });
+      ensureBalance(address);
+      balances[address] += 1000;
+      return send(res, 200, { address, balance: balances[address], message: '1000 GLR claimed' });
+    }
+
+    // POST /api/transfer
+    if (req.method === 'POST' && base === 'transfer') {
+      const { from, to, amount } = await parseBody(req);
+      if (!from || !to || !amount) return send(res, 400, { error: 'from, to, and amount required' });
+      ensureBalance(from);
+      ensureBalance(to);
+      const amt = parseFloat(amount);
+      if (balances[from] < amt) return send(res, 400, { error: 'Insufficient balance' });
+      balances[from] -= amt;
+      balances[to] += amt;
+      return send(res, 200, { from, to, amount: amt, fromBalance: balances[from], toBalance: balances[to] });
     }
 
     // 404

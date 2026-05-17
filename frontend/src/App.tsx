@@ -43,6 +43,12 @@ interface Task {
   contractTaskId?: number;
 }
 
+interface NetworkInfo {
+  mode: string;
+  network: string;
+  contractAddress: string | null;
+}
+
 interface Skill {
   id: string;
   label: string;
@@ -92,6 +98,7 @@ function App() {
   const [newAgent, setNewAgent] = useState({ name: '', model: '', specialty: '', description: '', icon: 'cpu', accent: 'purple', selectedSkills: [] as string[] });
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -121,11 +128,19 @@ function App() {
     } catch (err) { console.error('Failed to fetch skills', err); }
   }, []);
 
+  const fetchNetworkInfo = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/`);
+      setNetworkInfo(res.data);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     fetchTasks();
     fetchAgents();
     fetchSkills();
-  }, [fetchTasks, fetchAgents, fetchSkills]);
+    fetchNetworkInfo();
+  }, [fetchTasks, fetchAgents, fetchSkills, fetchNetworkInfo]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,6 +243,12 @@ function App() {
             {mobileMenuOpen ? <X size={17} /> : <Menu size={17} />}
           </button>
           <div className="navbar-actions">
+            {networkInfo && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', padding: '0.3rem 0.6rem', borderRadius: '6px', background: networkInfo.mode === 'live' ? 'rgba(0,255,163,0.1)' : 'rgba(245,158,11,0.1)', color: networkInfo.mode === 'live' ? 'var(--success)' : 'var(--warning)', border: '1px solid var(--border-color)', fontFamily: 'monospace' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: networkInfo.mode === 'live' ? 'var(--success)' : 'var(--warning)', display: 'inline-block' }} />
+                {networkInfo.mode === 'live' ? networkInfo.network : 'mock'}
+              </span>
+            )}
             <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>
@@ -306,7 +327,7 @@ function App() {
                 </div>
                 <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Shield size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>3. Onchain Verification</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The Mock Bridge simulates a blockchain confirmation. Tasks get a "VERIFIED" status with a transaction hash.</p>
+                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The GenLayer network confirms the result onchain. Tasks get a "VERIFIED" status with a transaction hash and block number.</p>
                 </div>
               </div>
             </section>
@@ -412,10 +433,17 @@ function App() {
                     <div style={{ marginBottom: '1.5rem' }}>
                       <p style={{ fontSize: '0.9rem' }}>{selectedTask.description}</p>
                     </div>
-                    {selectedTask.txId && (
+                    {(selectedTask.txId || networkInfo?.contractAddress) && (
                       <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', background: 'var(--card-bg)', padding: '0.5rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid var(--border)' }}>
-                        <div>TX: <span style={{ color: 'var(--accent-primary)' }}>{selectedTask.txId}</span></div>
-                        <div style={{ marginTop: '0.2rem' }}>Block: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.blockNumber}</span></div>
+                        {networkInfo?.contractAddress && (
+                          <div>Contract: <span style={{ color: 'var(--accent-primary)' }}>{networkInfo.contractAddress.slice(0, 10)}...{networkInfo.contractAddress.slice(-6)}</span></div>
+                        )}
+                        {selectedTask.txId && (
+                          <div style={{ marginTop: '0.2rem' }}>TX: <span style={{ color: 'var(--accent-primary)' }}>{selectedTask.txId}</span></div>
+                        )}
+                        {selectedTask.blockNumber && (
+                          <div style={{ marginTop: '0.2rem' }}>Block: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.blockNumber}</span></div>
+                        )}
                       </div>
                     )}
                     {selectedTask.status === 'PENDING' && (

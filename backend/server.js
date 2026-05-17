@@ -155,7 +155,13 @@ app.get(apiRoute('/auth/me'), (req, res) => {
 
 // ── Health check ─────────────────────────────────────────────
 app.get(apiRoute('/'), (req, res) => {
-  res.json({ status: 'Orbitjob backend running', seed: true });
+  res.json({
+    status: 'Orbitjob backend running',
+    mode: bridge.isMockMode() ? 'mock' : 'live',
+    network: bridge.getNetworkName(),
+    contractAddress: bridge.getContractAddress(),
+    seed: true,
+  });
 });
 
 // ── Skills Routes ──────────────────────────────────────────────
