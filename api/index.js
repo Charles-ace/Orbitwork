@@ -1,7 +1,3 @@
-// Force Vercel to bundle genlayer-js package and dependencies
-const glJson = require('genlayer-js/package.json');
-const viemJson = require('viem/package.json');
-
 const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
