@@ -4,7 +4,7 @@ import { ethers } from 'ethers';
 import {
   Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon,
   CheckCircle, BarChart3, Code, PenLine, Shield, Cpu, Sparkles, Rocket, Users,
-  X, Book, GitFork, Wallet, Menu
+  X, Book, GitFork, Wallet, Menu, Copy, ExternalLink
 } from 'lucide-react';
 
 // Custom premium icons from public assets
@@ -254,6 +254,14 @@ function App() {
   const goToAgents = () => { setPage('agents'); setSelectedTask(null); closeMobile(); };
   const goToLanding = () => { setPage('landing'); setSelectedTask(null); closeMobile(); };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).catch(() => {});
+  };
+
+  const blockExplorerUrl = networkInfo?.network === 'bradbury'
+    ? `https://bradbury.genlayer.net/address/${networkInfo?.contractAddress}`
+    : null;
+
   return (
     <>
       <div className="app-container">
@@ -273,13 +281,19 @@ function App() {
           </button>
           <div className="navbar-actions">
             {networkInfo && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', padding: '0.3rem 0.6rem', borderRadius: '6px', background: networkInfo.mode === 'live' ? 'rgba(0,255,163,0.1)' : 'rgba(245,158,11,0.1)', color: networkInfo.mode === 'live' ? 'var(--success)' : 'var(--warning)', border: '1px solid var(--border-color)', fontFamily: 'monospace' }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: networkInfo.mode === 'live' ? 'var(--success)' : 'var(--warning)', display: 'inline-block' }} />
-                {networkInfo.mode === 'live' ? networkInfo.network : 'mock'}
+              <div className="network-badge" data-mode={networkInfo.mode}>
+                <span className="network-badge-dot" />
+                <span className="network-badge-name">
+                  {networkInfo.mode === 'live' ? 'GenLayer ' + networkInfo.network : 'Mock Mode'}
+                </span>
                 {networkInfo.contractAddress && (
-                  <span title="Contract Address">| {networkInfo.contractAddress.slice(0, 8)}...{networkInfo.contractAddress.slice(-4)}</span>
+                  <span className="network-badge-contract" onClick={() => copyToClipboard(networkInfo.contractAddress!)} title="Copy contract address">
+                    <span className="network-badge-sep">|</span>
+                    {networkInfo.contractAddress.slice(0, 8)}...{networkInfo.contractAddress.slice(-4)}
+                    <Copy size={11} style={{ opacity: 0.6 }} />
+                  </span>
                 )}
-              </span>
+              </div>
             )}
             <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
@@ -649,6 +663,46 @@ function App() {
           </div>
         </div>
       )}
+
+        {/* ── Footer ─────────────────────────────────────── */}
+        <footer className="app-footer">
+          <div className="footer-content">
+            <div className="footer-left">
+              <span className="footer-brand">
+                <Zap size={16} color="var(--accent-primary)" />
+                Orbitjob
+              </span>
+              <span className="footer-sep">·</span>
+              <span className="footer-text">AI Task Marketplace on GenLayer</span>
+            </div>
+            <div className="footer-right">
+              {networkInfo && (
+                <>
+                  <span className="footer-network-badge" data-mode={networkInfo.mode}>
+                    <span className="footer-network-dot" />
+                    {networkInfo.mode === 'live' ? networkInfo.network : 'mock'}
+                  </span>
+                  {networkInfo.contractAddress && (
+                    <span className="footer-contract" onClick={() => copyToClipboard(networkInfo.contractAddress!)} title="Copy contract address">
+                      <span className="footer-contract-label">Contract</span>
+                      <code className="footer-contract-address">
+                        {networkInfo.contractAddress.slice(0, 10)}...{networkInfo.contractAddress.slice(-8)}
+                      </code>
+                      <Copy size={12} className="footer-copy-icon" />
+                      {blockExplorerUrl && (
+                        <a href={blockExplorerUrl} target="_blank" rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          title="View on block explorer">
+                          <ExternalLink size={12} />
+                        </a>
+                      )}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </footer>
     </>
   );
 }
