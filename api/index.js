@@ -240,10 +240,74 @@ module.exports = async (req, res) => {
       return res.end(raw);
     }
 
+    // ── Skills CRUD ──
+    // POST /api/skills
+    if (req.method === 'POST' && base === 'skills') {
+      const { id, label, description: skillDesc, promptDirective } = await parseBody(req);
+      if (!id || !label) return send(res, 400, { error: 'id and label are required' });
+      const { skills, raw } = getSkills();
+      if (skills.find(s => s.id === id)) return send(res, 409, { error: 'Skill already exists' });
+      const newSkill = { id, label, description: skillDesc || '', promptDirective: promptDirective || '' };
+      skills.push(newSkill);
+      skillsCache = { raw, skills };
+      return send(res, 201, newSkill);
+    }
+
+    // PUT /api/skills/:id
+    const skillById = base.match(/^skills\/(.+)$/);
+    if (req.method === 'PUT' && skillById) {
+      const { skills, raw } = getSkills();
+      const idx = skills.findIndex(s => s.id === skillById[1]);
+      if (idx === -1) return send(res, 404, { error: 'Skill not found' });
+      const updates = await parseBody(req);
+      if (updates.label) skills[idx].label = updates.label;
+      if (updates.description !== undefined) skills[idx].description = updates.description;
+      if (updates.promptDirective !== undefined) skills[idx].promptDirective = updates.promptDirective;
+      skillsCache = { raw, skills };
+      return send(res, 200, skills[idx]);
+    }
+
+    // DELETE /api/skills/:id
+    if (req.method === 'DELETE' && skillById) {
+      const { skills, raw } = getSkills();
+      const idx = skills.findIndex(s => s.id === skillById[1]);
+      if (idx === -1) return send(res, 404, { error: 'Skill not found' });
+      const removed = skills.splice(idx, 1)[0];
+      skillsCache = { raw, skills };
+      return send(res, 200, { message: 'Skill removed', skill: removed });
+    }
+
     // ── Task Routes ──
     // GET /api/tasks
     if (req.method === 'GET' && base === 'tasks') {
-      return send(res, 200, taskCache);
+      const url = new URL(req.url, 'http://localhost');
+      const status = url.searchParams.get('status');
+      const assignedAgent = url.searchParams.get('assignedAgent');
+      const search = url.searchParams.get('search')?.toLowerCase();
+      const page = Math.max(1, parseInt(url.searchParams.get('page')) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit')) || 50));
+
+      let filtered = taskCache;
+
+      if (status) {
+        filtered = filtered.filter(t => t.status === status.toUpperCase());
+      }
+      if (assignedAgent) {
+        filtered = filtered.filter(t => t.assignedAgent === assignedAgent);
+      }
+      if (search) {
+        filtered = filtered.filter(t =>
+          t.title?.toLowerCase().includes(search) ||
+          t.description?.toLowerCase().includes(search)
+        );
+      }
+
+      const total = filtered.length;
+      const totalPages = Math.ceil(total / limit);
+      const start = (page - 1) * limit;
+      const items = filtered.slice(start, start + limit);
+
+      return send(res, 200, { items, total, page, totalPages, limit });
     }
 
     // GET /api/tasks/:id
@@ -252,6 +316,32 @@ module.exports = async (req, res) => {
       const task = taskCache.find(t => t.id === taskById[1] || t.contractTaskId === Number(taskById[1]));
       if (!task) return send(res, 404, { error: 'Task not found' });
       return send(res, 200, task);
+    }
+
+    // PUT /api/tasks/:id — update a task
+    if (req.method === 'PUT' && taskById) {
+      const idx = taskCache.findIndex(t => t.id === taskById[1] || t.contractTaskId === Number(taskById[1]));
+      if (idx === -1) return send(res, 404, { error: 'Task not found' });
+
+      const updates = await parseBody(req);
+      const allowed = ['title', 'description', 'constraints', 'reward', 'deadline', 'assignedAgent'];
+      for (const key of allowed) {
+        if (updates[key] !== undefined) {
+          if (key === 'reward') taskCache[idx][key] = parseFloat(updates[key]);
+          else taskCache[idx][key] = updates[key];
+        }
+      }
+      db.setTasks(taskCache);
+      return send(res, 200, taskCache[idx]);
+    }
+
+    // DELETE /api/tasks/:id — delete a task
+    if (req.method === 'DELETE' && taskById) {
+      const idx = taskCache.findIndex(t => t.id === taskById[1] || t.contractTaskId === Number(taskById[1]));
+      if (idx === -1) return send(res, 404, { error: 'Task not found' });
+      const removed = taskCache.splice(idx, 1)[0];
+      db.setTasks(taskCache);
+      return send(res, 200, { message: 'Task removed', task: removed });
     }
 
     // POST /api/tasks

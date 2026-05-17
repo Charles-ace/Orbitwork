@@ -103,7 +103,7 @@ function App() {
   const fetchTasks = useCallback(async () => {
     try {
       const res = await axios.get(`${API_BASE}/tasks`);
-      setTasks(res.data);
+      setTasks(res.data.items || res.data);
     } catch (err) { console.error('Failed to fetch tasks', err); }
   }, []);
 
@@ -153,9 +153,10 @@ function App() {
       fetchTasks();
       const interval = setInterval(async () => {
         const res = await axios.get(`${API_BASE}/tasks`);
-        const task = res.data.find((t: Task) => t.id === id);
+        const items: Task[] = res.data.items || res.data;
+        const task = items.find((t: Task) => t.id === id);
         if (task && (task.status === 'COMPLETED' || task.status === 'FAILED')) {
-          setTasks(res.data);
+          setTasks(items);
           clearInterval(interval);
         }
       }, 1000);

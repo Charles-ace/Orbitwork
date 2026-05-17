@@ -29,10 +29,32 @@ describe('GET /api/skills', () => {
 });
 
 describe('GET /api/tasks', () => {
-  it('returns task array', async () => {
+  it('returns paginated tasks', async () => {
     const res = await request(app).get('/api/tasks');
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveProperty('items');
+    expect(Array.isArray(res.body.items)).toBe(true);
+    expect(res.body).toHaveProperty('total');
+    expect(res.body).toHaveProperty('page');
+  });
+
+  it('filters by status', async () => {
+    const res = await request(app).get('/api/tasks?status=PENDING');
+    expect(res.status).toBe(200);
+    expect(res.body.items.every(t => t.status === 'PENDING')).toBe(true);
+  });
+
+  it('filters by search', async () => {
+    const res = await request(app).get('/api/tasks?search=market');
+    expect(res.status).toBe(200);
+    expect(res.body.items.length).toBeGreaterThan(0);
+  });
+
+  it('supports pagination', async () => {
+    const res = await request(app).get('/api/tasks?page=1&limit=1');
+    expect(res.status).toBe(200);
+    expect(res.body.items.length).toBeLessThanOrEqual(1);
+    expect(res.body.totalPages).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -82,6 +104,88 @@ describe('POST /api/agents', () => {
       .post('/api/agents')
       .send({ description: 'no name' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('PUT /api/tasks/:id', () => {
+  let taskId;
+
+  beforeAll(async () => {
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'Update Test', description: 'Will be updated' });
+    taskId = res.body.id;
+  });
+
+  it('updates task fields', async () => {
+    const res = await request(app)
+      .put(`/api/tasks/${taskId}`)
+      .send({ title: 'Updated Title', reward: 999 });
+    expect(res.status).toBe(200);
+    expect(res.body.title).toBe('Updated Title');
+    expect(res.body.reward).toBe(999);
+  });
+
+  it('returns 404 for unknown task', async () => {
+    const res = await request(app).put('/api/tasks/nonexistent').send({ title: 'Nope' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('DELETE /api/tasks/:id', () => {
+  let taskId;
+
+  beforeAll(async () => {
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'Delete Test', description: 'Will be deleted' });
+    taskId = res.body.id;
+  });
+
+  it('deletes a task', async () => {
+    const res = await request(app).delete(`/api/tasks/${taskId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/removed/);
+  });
+
+  it('returns 404 for already deleted task', async () => {
+    const res = await request(app).delete(`/api/tasks/${taskId}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('Skills CRUD', () => {
+  it('POST /api/skills creates a skill', async () => {
+    const res = await request(app)
+      .post('/api/skills')
+      .send({ id: 'test-skill', label: 'Test Skill', description: 'A test' });
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe('test-skill');
+  });
+
+  it('POST /api/skills rejects duplicate', async () => {
+    const res = await request(app)
+      .post('/api/skills')
+      .send({ id: 'test-skill', label: 'Test Skill' });
+    expect(res.status).toBe(409);
+  });
+
+  it('PUT /api/skills/:id updates a skill', async () => {
+    const res = await request(app)
+      .put('/api/skills/test-skill')
+      .send({ label: 'Updated Skill' });
+    expect(res.status).toBe(200);
+    expect(res.body.label).toBe('Updated Skill');
+  });
+
+  it('DELETE /api/skills/:id removes a skill', async () => {
+    const res = await request(app).delete('/api/skills/test-skill');
+    expect(res.status).toBe(200);
+  });
+
+  it('DELETE /api/skills/:id returns 404 for missing skill', async () => {
+    const res = await request(app).delete('/api/skills/nonexistent');
+    expect(res.status).toBe(404);
   });
 });
 

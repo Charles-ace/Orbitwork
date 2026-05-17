@@ -158,16 +158,76 @@ app.get(apiRoute('/'), (req, res) => {
   res.json({ status: 'Orbitjob backend running', seed: true });
 });
 
-// ── Skills Route ──────────────────────────────────────────────
+// ── Skills Routes ──────────────────────────────────────────────
 app.get(apiRoute('/skills'), (req, res) => {
   res.json(getSkills());
 });
 
+// Create a skill
+app.post(apiRoute('/skills'), (req, res) => {
+  const { id, label, description, promptDirective } = req.body;
+  if (!id || !label) return res.status(400).json({ error: 'id and label are required' });
+  const skills = getSkills();
+  if (skills.find(s => s.id === id)) return res.status(409).json({ error: 'Skill already exists' });
+  const newSkill = { id, label, description: description || '', promptDirective: promptDirective || '' };
+  skills.push(newSkill);
+  skillsCache = skills;
+  res.status(201).json(newSkill);
+});
+
+// Update a skill
+app.put(apiRoute('/skills/:id'), (req, res) => {
+  const skills = getSkills();
+  const skill = skills.find(s => s.id === req.params.id);
+  if (!skill) return res.status(404).json({ error: 'Skill not found' });
+  const { label, description, promptDirective } = req.body;
+  if (label) skill.label = label;
+  if (description !== undefined) skill.description = description;
+  if (promptDirective !== undefined) skill.promptDirective = promptDirective;
+  skillsCache = skills;
+  res.json(skill);
+});
+
+// Delete a skill
+app.delete(apiRoute('/skills/:id'), (req, res) => {
+  const skills = getSkills();
+  const idx = skills.findIndex(s => s.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Skill not found' });
+  const removed = skills.splice(idx, 1)[0];
+  skillsCache = skills;
+  res.json({ message: 'Skill removed', skill: removed });
+});
+
 // ── Task Routes ──────────────────────────────────────────────
 
-// List all tasks
+// List all tasks (with filtering & pagination)
 app.get(apiRoute('/tasks'), async (req, res) => {
-  res.json(taskCache);
+  const { status, assignedAgent, search, page: pageStr, limit: limitStr } = req.query;
+  const page = Math.max(1, parseInt(pageStr) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(limitStr) || 50));
+
+  let filtered = taskCache;
+
+  if (status) {
+    filtered = filtered.filter(t => t.status === status.toUpperCase());
+  }
+  if (assignedAgent) {
+    filtered = filtered.filter(t => t.assignedAgent === assignedAgent);
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(t =>
+      t.title?.toLowerCase().includes(q) ||
+      t.description?.toLowerCase().includes(q)
+    );
+  }
+
+  const total = filtered.length;
+  const totalPages = Math.ceil(total / limit);
+  const start = (page - 1) * limit;
+  const items = filtered.slice(start, start + limit);
+
+  res.json({ items, total, page, totalPages, limit });
 });
 
 // Get single task
@@ -175,6 +235,30 @@ app.get(apiRoute('/tasks/:id'), (req, res) => {
   const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
+});
+
+// Update a task
+app.put(apiRoute('/tasks/:id'), (req, res) => {
+  const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  const { title, description, constraints, reward, deadline, assignedAgent } = req.body;
+  if (title) task.title = title;
+  if (description) task.description = description;
+  if (constraints !== undefined) task.constraints = constraints;
+  if (reward !== undefined) task.reward = parseFloat(reward);
+  if (deadline !== undefined) task.deadline = deadline;
+  if (assignedAgent) task.assignedAgent = assignedAgent;
+
+  res.json(task);
+});
+
+// Delete a task
+app.delete(apiRoute('/tasks/:id'), (req, res) => {
+  const idx = taskCache.findIndex(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
+  if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+  const removed = taskCache.splice(idx, 1)[0];
+  res.json({ message: 'Task removed', task: removed });
 });
 
 // Create a task
