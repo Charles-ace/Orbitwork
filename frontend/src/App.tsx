@@ -178,6 +178,26 @@ function App() {
     } catch (err) { console.error('Failed to execute task', err); }
   };
 
+  const GENLAYER_CHAIN_ID = '0xEEBB'; // 61123
+  const GENLAYER_RPC = networkInfo?.network === 'bradbury'
+    ? 'https://bradbury.genlayer.net'
+    : 'http://127.0.0.1:8545';
+
+  const switchToGenLayer = async (provider: ethers.providers.Web3Provider) => {
+    try {
+      await provider.send('wallet_switchEthereumChain', [{ chainId: GENLAYER_CHAIN_ID }]);
+    } catch (switchError: any) {
+      if (switchError.code === 4902) {
+        await provider.send('wallet_addEthereumChain', [{
+          chainId: GENLAYER_CHAIN_ID,
+          chainName: networkInfo?.network === 'bradbury' ? 'GenLayer Bradbury' : 'GenLayer Localnet',
+          rpcUrls: [GENLAYER_RPC],
+          nativeCurrency: { name: 'GLR', symbol: 'GLR', decimals: 18 },
+        }]);
+      }
+    }
+  };
+
   const connectWallet = async () => {
     if (!window.ethereum) {
       alert('Please install MetaMask to connect.');
@@ -187,15 +207,24 @@ function App() {
     try {
       const provider = new ethers.providers.Web3Provider(window.ethereum as any);
       await provider.send('eth_requestAccounts', []);
+
+      try { await switchToGenLayer(provider); } catch {}
+
       const signer = provider.getSigner();
       const address = await signer.getAddress();
-      const balance = ethers.utils.formatEther(await provider.getBalance(address));
 
       const challengeRes = await axios.get(`${API_BASE}/auth/challenge`, { params: { address } });
       const { nonce } = challengeRes.data;
       const signature = await signer.signMessage(nonce);
       const signinRes = await axios.post(`${API_BASE}/auth/signin`, { address, signature });
       const { token } = signinRes.data;
+
+      // Fetch GLR balance from backend faucet system instead of ETH balance
+      let balance = '0.0';
+      try {
+        const balRes = await axios.get(`${API_BASE}/balances/${address.toLowerCase()}`);
+        balance = String(balRes.data.balance);
+      } catch {}
 
       setAuthToken(token);
       setWallet({ address, balance });
@@ -259,8 +288,10 @@ function App() {
             )}
             {wallet ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                   <span style={{ width: 8, height: 8, borderRadius: '50%', background: authToken ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)', display: 'inline-block' }} />
+                  <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>{wallet.balance} GLR</span>
+                  <span>|</span>
                   {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
                 </span>
                 <button className="btn btn-ghost" onClick={disconnectWallet}>
@@ -456,6 +487,12 @@ function App() {
                       <div className="card glass executing-container" style={{ borderStyle: 'dashed', textAlign: 'center' }}>
                         <div className="spinner" style={{ marginBottom: '0.75rem' }}></div>
                         <p style={{ fontSize: '0.9rem' }}>Agent is processing task...</p>
+                      </div>
+                    )}
+                    {selectedTask.status === 'FAILED' && (
+                      <div style={{ color: 'var(--danger)', fontSize: '0.9rem', marginBottom: '1rem', padding: '0.75rem', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                        <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Execution Failed</div>
+                        <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>{selectedTask.result?.summary || 'No error details available'}</div>
                       </div>
                     )}
                     {selectedTask.status === 'COMPLETED' && (

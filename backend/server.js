@@ -71,7 +71,8 @@ function getSkills() {
 }
 
 // ── Task Cache ───────────────────────────────────────────────
-let taskCache = [
+// Seed tasks only used in mock mode — live mode uses onchain state
+const seedTasks = [
   {
     id: 'seed-1',
     title: 'Analyze Orbitjob Market Fit',
@@ -102,6 +103,8 @@ let taskCache = [
     assignedAgent: 'agent-epsilon'
   }
 ];
+
+let taskCache = [];
 
 const accentColors = ['purple', 'blue', 'green', 'orange', 'red', 'cyan'];
 const iconMap = { cpu: 'cpu', barChart: 'barChart', code: 'code', penLine: 'penLine', shield: 'shield', search: 'search' };
@@ -653,6 +656,9 @@ app.get(apiRoute('/tasks/:id/subtasks'), (req, res) => {
 bridge.init().then(() => {
   const modeLabel = bridge.isMockMode() ? 'Mock Onchain Mode' : 'GenLayer Live Mode';
   console.log(`  → Bridge mode: ${modeLabel}`);
+  if (bridge.isMockMode()) {
+    taskCache.push(...seedTasks);
+  }
 }).catch(err => {
   console.error('  → Bridge init failed:', err.message);
 });

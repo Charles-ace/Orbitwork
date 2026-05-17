@@ -48,7 +48,7 @@ function getSkills() {
 // ── Onchain Bridge ──
 // Uses shared genlayer-bridge from backend/ — falls back to mock when no contract configured
 
-// ── Seed Data ──
+// ── Seed Data (only in mock mode — live mode uses onchain state) ──
 const seedTasks = [
   {
     id: 'seed-1',
@@ -91,7 +91,14 @@ const seedAgents = [
 ];
 
 // ── Persistent Storage ──
-let taskCache = db.loadTasks(seedTasks);
+let taskCache = [];
+
+let ready = bridge.init().then(() => {
+  if (bridge.isMockMode()) {
+    taskCache.push(...seedTasks);
+    db.setTasks(taskCache);
+  }
+}).catch(err => console.error('Bridge init failed:', err.message));
 let agents = db.loadAgents(seedAgents);
 
 // ── Auth Sessions ──
@@ -128,6 +135,8 @@ const matchPath = (url) => {
 
 // ── Handler ──
 module.exports = async (req, res) => {
+  await ready;
+
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
