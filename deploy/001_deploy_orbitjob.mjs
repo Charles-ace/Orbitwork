@@ -33,7 +33,7 @@ export default async function main(client) {
     throw new Error(`Deployment failed: ${JSON.stringify(receipt)}`);
   }
 
-  const isTestnet = client.chain?.id === 61123n;
+  const isTestnet = client.chain?.id === 4221n;
   const contractAddress = isTestnet
     ? receipt.txDataDecoded?.contractAddress
     : receipt.data?.contract_address;

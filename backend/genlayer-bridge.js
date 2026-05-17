@@ -69,20 +69,21 @@ async function initRealBridge() {
 async function buildChainConfig(network) {
   try {
     const chainsModule = await import('genlayer-js/chains');
-    const known = chainsModule?.[network] || chainsModule?.chains?.[network];
+    const chainName = network === 'studionet' ? 'studionet' : network === 'bradbury' ? 'testnetBradbury' : network;
+    const known = chainsModule?.[chainName] || chainsModule?.chains?.[chainName];
     if (known) return { ...known };
   } catch {}
 
   const rpcUrl = process.env.GENLAYER_RPC_URL;
   const rpcMap = {
     localnet: 'http://127.0.0.1:8545',
-    bradbury: 'https://bradbury.genlayer.net',
+    bradbury: 'https://rpc-bradbury.genlayer.com',
     testnet: 'https://testnet.genlayer.net',
     mainnet: 'https://mainnet.genlayer.net',
   };
 
   return {
-    id: 61123n,
+    id: (network === 'studionet' || network === 'bradbury') ? 4221 : 61123n,
     name: network,
     rpc: { default: rpcUrl || rpcMap[network] || `https://${network}.genlayer.net` },
   };

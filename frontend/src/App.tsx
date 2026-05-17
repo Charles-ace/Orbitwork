@@ -178,9 +178,9 @@ function App() {
     } catch (err) { console.error('Failed to execute task', err); }
   };
 
-  const GENLAYER_CHAIN_ID = '0xEEBB'; // 61123
+  const GENLAYER_CHAIN_ID = '0x107D'; // 4221
   const GENLAYER_RPC = networkInfo?.network === 'bradbury'
-    ? 'https://bradbury.genlayer.net'
+    ? 'https://rpc-bradbury.genlayer.com'
     : 'http://127.0.0.1:8545';
 
   const switchToGenLayer = async (provider: ethers.providers.Web3Provider) => {
@@ -259,7 +259,7 @@ function App() {
   };
 
   const blockExplorerUrl = networkInfo?.network === 'bradbury'
-    ? `https://bradbury.genlayer.net/address/${networkInfo?.contractAddress}`
+    ? `https://explorer-bradbury.genlayer.com/address/${networkInfo?.contractAddress}`
     : null;
 
   return (

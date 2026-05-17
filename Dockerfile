@@ -3,6 +3,7 @@ WORKDIR /build
 COPY backend/package*.json ./
 RUN npm ci
 COPY backend/ ./
+RUN npx prisma generate
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
@@ -14,6 +15,8 @@ COPY --from=build /build/server.js ./
 COPY --from=build /build/genlayer-bridge.js ./
 COPY --from=build /build/vitest.config.js ./
 COPY --from=build /build/__tests__ ./__tests__
+COPY --from=build /build/prisma ./prisma
+COPY --from=build /build/generated ./generated
 COPY docs /app/docs
 USER appuser
 EXPOSE 5005

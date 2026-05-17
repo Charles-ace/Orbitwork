@@ -31,6 +31,20 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: orbitjob_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +53,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orbitjob_test?schema=public
       - run: npm test
         env:
           OPENROUTER_API_KEY: test-skip
@@ -47,6 +64,8 @@ jobs:
           GENLAYER_NETWORK: localnet
           PORT: "0"
           FRONTEND_ORIGIN: "http://localhost:5173"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orbitjob_test?schema=public
+          NODE_ENV: test
 
   frontend-build:
     runs-on: ubuntu-latest

@@ -12,10 +12,17 @@ const promClient = require('prom-client');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const bridge = require('./genlayer-bridge');
+const { PrismaClient } = require('@prisma/client');
+const { PrismaBetterSqlite3 } = require('@prisma/adapter-better-sqlite3');
 
 dotenvSafe.config({
-  path: path.resolve(__dirname, '..', '.env'),
-  example: path.resolve(__dirname, '.env.example'),
+  path: path.resolve(__dirname, '.env'),
+  example: path.resolve(__dirname, '..', '.env.example'),
+  allowEmptyValues: true,
+});
+
+const sqliteAdapter = new PrismaBetterSqlite3({
+  url: process.env.DATABASE_URL || 'file:./dev.db',
 });
 
 const logger = pino({
@@ -24,6 +31,14 @@ const logger = pino({
     transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } },
   }),
 });
+
+const prisma = new PrismaClient({
+  adapter: sqliteAdapter,
+  log: [{ emit: 'event', level: 'query' }, { emit: 'event', level: 'error' }, { emit: 'event', level: 'warn' }],
+});
+prisma.$on('query', (e) => logger.debug({ query: e.query, params: e.params, duration: `${e.duration}ms` }, 'prisma query'));
+prisma.$on('error', (e) => logger.error({ error: e }, 'prisma error'));
+prisma.$on('warn', (e) => logger.warn({ error: e }, 'prisma warning'));
 
 // ── Input Validation Schemas ──────────────────────────────────
 const taskCreateSchema = z.object({
@@ -166,7 +181,8 @@ app.use((req, res, next) => {
 });
 
 // ── Rate Limiters (lazy Redis store) ──
-let rateLimitersInitialized = false;
+let redis;
+let redisAvailable = false;
 
 function createLazyLimiter(options) {
   let limiter = null;
@@ -248,6 +264,7 @@ app.get('/api/docs.json', (req, res) => res.json(swaggerSpec));
 
 app.get('/healthz', async (req, res) => {
   let redisStatus = 'unavailable';
+  let dbStatus = 'unavailable';
   if (redisAvailable) {
     try {
       await redis.ping();
@@ -256,11 +273,18 @@ app.get('/healthz', async (req, res) => {
       redisStatus = 'error';
     }
   }
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    dbStatus = 'connected';
+  } catch {
+    dbStatus = 'error';
+  }
   res.json({
     status: 'ok',
     mode: bridge.isMockMode() ? 'mock' : 'live',
     uptime: process.uptime(),
     redis: redisStatus,
+    database: dbStatus,
   });
 });
 
@@ -275,7 +299,7 @@ const SKILLS_FILE = path.join(__dirname, '..', 'docs', 'expert-skills.md');
 
 let skillsCache = null;
 
-function loadSkills() {
+function loadSkillsFromFile() {
   try {
     if (fs.existsSync(SKILLS_FILE)) {
       const raw = fs.readFileSync(SKILLS_FILE, 'utf-8');
@@ -303,15 +327,32 @@ function loadSkills() {
   return [];
 }
 
-function getSkills() {
-  if (!skillsCache) skillsCache = loadSkills();
+async function getSkills() {
+  if (!skillsCache) {
+    const dbSkills = await prisma.skill.findMany();
+    if (dbSkills.length === 0) {
+      skillsCache = loadSkillsFromFile();
+    } else {
+      skillsCache = dbSkills;
+    }
+  }
   return skillsCache;
 }
 
-// ── Redis Sessions ─────────────────────────────────────────────
-let redis;
-let redisAvailable = false;
+async function syncSkillsToDb() {
+  const fileSkills = loadSkillsFromFile();
+  if (fileSkills.length === 0) return;
+  for (const skill of fileSkills) {
+    await prisma.skill.upsert({
+      where: { id: skill.id },
+      update: { label: skill.label, description: skill.description, promptDirective: skill.promptDirective },
+      create: skill,
+    });
+  }
+  skillsCache = null;
+}
 
+// ── Redis Sessions ─────────────────────────────────────────────
 async function initRedis() {
   const redisUrl = process.env.REDIS_URL;
   try {
@@ -337,50 +378,16 @@ async function initRedis() {
     redisAvailable = true;
     logger.info('Redis connected');
   } catch (err) {
-    logger.warn({ err }, 'Redis unavailable, falling back to in-memory sessions');
+    logger.warn({ err }, 'Redis unavailable, falling back to database sessions');
     redis = null;
     redisAvailable = false;
   }
 }
 
-// ── Seed Tasks ───────────────────────────────────────────────
-const seedTasks = [
-  {
-    id: 'seed-1',
-    title: 'Analyze Orbitjob Market Fit',
-    description: 'Provide a detailed report on how Orbitjob compares to traditional freelancer platforms like Upwork.',
-    status: 'COMPLETED',
-    reward: 150,
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    executionTrace: { agent: 'Antigravity Alpha', plan: ['Search competitors', 'Analyze fee structures', 'Summarize USPs'], startedAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 86300000).toISOString(), steps: [] },
-    verificationStatus: 'VERIFIED',
-    result: { summary: 'Orbitjob offers 90% lower fees via GenLayer consensus.', data: {} },
-    confidenceScore: 0.95,
-    assignedAgent: 'agent-alpha',
-    txId: '0x7d...a1f',
-    blockNumber: 42069,
-    contractTaskId: 1
-  },
-  {
-    id: 'seed-2',
-    title: 'Smart Contract Security Audit',
-    description: 'Review the Orbitjob intelligent contract for potential reentrancy or logic flaws.',
-    status: 'PENDING',
-    reward: 500,
-    createdAt: new Date().toISOString(),
-    executionTrace: null,
-    verificationStatus: 'NOT_VERIFIED',
-    result: null,
-    confidenceScore: 0,
-    assignedAgent: 'agent-epsilon'
-  }
-];
-
-let taskCache = [];
-
+// ── Seed Data ───────────────────────────────────────────────
 const accentColors = ['purple', 'blue', 'green', 'orange', 'red', 'cyan'];
 
-let agents = [
+const seedAgents = [
   { id: 'agent-alpha', name: 'Antigravity Alpha', model: 'qwen/qwen-2.5-coder:free', specialty: 'General Purpose', icon: 'cpu', price: 0.05, description: 'Versatile AI agent capable of handling a wide range of tasks from research to content generation.', useCases: ['Market research & trend analysis', 'General data processing', 'Document summarization', 'Multi-domain Q&A'], rating: 4.8, completedTasks: 142, status: 'IDLE', accent: 'purple', skills: ['web-research', 'content-gen'] },
   { id: 'agent-beta', name: 'DataForge Beta', model: 'gpt-4-turbo', specialty: 'Data Analysis', icon: 'barChart', price: 0.08, description: 'Specialized in structured data analysis, statistical modeling, and visualization recommendations.', useCases: ['Dataset analysis & visualization', 'Statistical modeling', 'Financial report generation', 'Trend forecasting'], rating: 4.9, completedTasks: 89, status: 'IDLE', accent: 'blue', skills: ['data-analysis', 'content-gen'] },
   { id: 'agent-gamma', name: 'CodeWeaver Gamma', model: 'gpt-4-turbo', specialty: 'Code Generation', icon: 'code', price: 0.10, description: 'Expert-level code generation and review agent supporting multiple languages and frameworks.', useCases: ['Code generation & review', 'Bug fixing & debugging', 'Test writing', 'Architecture & refactoring advice'], rating: 4.7, completedTasks: 214, status: 'BUSY', accent: 'green', skills: ['code-analysis'] },
@@ -389,10 +396,68 @@ let agents = [
   { id: 'agent-zeta', name: 'Nexus Zeta', model: 'gpt-4-turbo', specialty: 'Deep Research', icon: 'search', price: 0.07, description: 'Deep research agent with advanced reasoning capabilities for synthesizing complex information.', useCases: ['Competitive analysis', 'Academic literature review', 'Technical deep dives', 'Feasibility studies'], rating: 4.8, completedTasks: 98, status: 'IDLE', accent: 'cyan', skills: ['web-research', 'data-analysis'] }
 ];
 
+const seedTasks = [
+  {
+    id: 'seed-1',
+    title: 'Analyze Orbitjob Market Fit',
+    description: 'Provide a detailed report on how Orbitjob compares to traditional freelancer platforms like Upwork.',
+    status: 'COMPLETED',
+    reward: 150,
+    executionTrace: JSON.stringify({ agent: 'Antigravity Alpha', plan: ['Search competitors', 'Analyze fee structures', 'Summarize USPs'], startedAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 86300000).toISOString(), steps: [] }),
+    verificationStatus: 'VERIFIED',
+    result: JSON.stringify({ summary: 'Orbitjob offers 90% lower fees via GenLayer consensus.', data: {} }),
+    confidenceScore: 0.95,
+    assignedAgent: 'agent-alpha',
+    txId: '0x7d...a1f',
+    blockNumber: 42069,
+    contractTaskId: 100
+  },
+  {
+    id: 'seed-2',
+    title: 'Smart Contract Security Audit',
+    description: 'Review the Orbitjob intelligent contract for potential reentrancy or logic flaws.',
+    status: 'PENDING',
+    reward: 500,
+    executionTrace: null,
+    verificationStatus: 'NOT_VERIFIED',
+    result: null,
+    confidenceScore: 0,
+    assignedAgent: 'agent-epsilon'
+  }
+];
+
+async function seedDatabase() {
+  const agentCount = await prisma.agent.count();
+  if (agentCount === 0) {
+    for (const agent of seedAgents) {
+      await prisma.agent.create({
+        data: {
+          ...agent,
+          useCases: JSON.stringify(agent.useCases),
+          skills: JSON.stringify(agent.skills),
+        },
+      });
+    }
+    logger.info({ count: seedAgents.length }, 'Seeded agents');
+  }
+
+  const taskCount = await prisma.task.count();
+  if (taskCount === 0 && bridge.isMockMode()) {
+    for (const task of seedTasks) {
+      await prisma.task.create({ data: task });
+    }
+    logger.info({ count: seedTasks.length }, 'Seeded tasks');
+  } else if (bridge.isMockMode()) {
+    const maxContractId = await prisma.task.aggregate({ _max: { contractTaskId: true } });
+    if (maxContractId._max.contractTaskId) {
+      bridge.setMockContractId(maxContractId._max.contractTaskId);
+    }
+  }
+}
+
 // ── Auth (Sign in with Ethereum / GenLayer) ────────────────────
 const { ethers } = require('ethers');
 const crypto = require('crypto');
-let sessions = {};
 
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
@@ -419,18 +484,22 @@ function verifyToken(token) {
 function getRedisClient() { return redis; }
 
 async function getSession(tokenOrAddress) {
-  // If it's a JWT token, verify and return it statelessly
   const decoded = verifyToken(tokenOrAddress);
   if (decoded) {
     return { address: decoded.address, signedInAt: decoded.signedInAt || Date.now() };
   }
 
-  // Fallback to Redis or in-memory session store
   if (redisAvailable) {
     const data = await redis.get(`session:${tokenOrAddress}`);
     return data ? JSON.parse(data) : null;
   }
-  return sessions[tokenOrAddress] || null;
+
+  const session = await prisma.session.findUnique({ where: { key: tokenOrAddress } });
+  if (!session || new Date(session.expiresAt) < new Date()) {
+    if (session) await prisma.session.delete({ where: { key: tokenOrAddress } });
+    return null;
+  }
+  return JSON.parse(session.value);
 }
 
 async function setSession(key, value) {
@@ -438,7 +507,13 @@ async function setSession(key, value) {
     await redis.setex(`session:${key}`, 3600, JSON.stringify(value));
     return;
   }
-  sessions[key] = value;
+
+  const expiresAt = new Date(Date.now() + 3600000);
+  await prisma.session.upsert({
+    where: { key },
+    update: { value: JSON.stringify(value), expiresAt },
+    create: { key, value: JSON.stringify(value), expiresAt },
+  });
 }
 
 async function delSession(key) {
@@ -446,7 +521,7 @@ async function delSession(key) {
     await redis.del(`session:${key}`);
     return;
   }
-  delete sessions[key];
+  await prisma.session.deleteMany({ where: { key } });
 }
 
 /**
@@ -513,7 +588,6 @@ app.post(['/api/auth/signin', '/auth/signin'], async (req, res) => {
     activeNonce = session.nonce;
     await delSession(address.toLowerCase());
   } else {
-    // Stateless cryptographic validation of nonce
     const addressMatch = activeNonce.match(/Address:\s*(0x[a-fA-F0-9]+)/i);
     if (!addressMatch || addressMatch[1].toLowerCase() !== address.toLowerCase()) {
       return res.status(400).json({ error: 'Invalid challenge address constraint' });
@@ -524,7 +598,7 @@ app.post(['/api/auth/signin', '/auth/signin'], async (req, res) => {
     }
     const timestamp = parseInt(nonceMatch[1], 10);
     const age = Date.now() - timestamp;
-    if (age < 0 || age > 300000) { // 5 minutes validity
+    if (age < 0 || age > 300000) {
       return res.status(401).json({ error: 'Challenge expired, request a new one' });
     }
   }
@@ -536,7 +610,6 @@ app.post(['/api/auth/signin', '/auth/signin'], async (req, res) => {
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
-  // Generate stateless JWT token (valid for 24h)
   const token = generateToken({
     address: address.toLowerCase(),
     signedInAt: Date.now(),
@@ -584,7 +657,7 @@ app.get(apiRoute('/auth/me'), async (req, res) => {
  *       401:
  *         description: Not authenticated
  */
-app.post(['/api/auth/refresh', '/api/auth/refresh'], async (req, res) => {
+app.post(['/api/auth/refresh', '/auth/refresh'], async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   const session = await getSession(token);
@@ -644,8 +717,8 @@ app.get(apiRoute('/'), (req, res) => {
  *       200:
  *         description: Skills array
  */
-app.get(apiRoute('/skills'), (req, res) => {
-  res.json(getSkills());
+app.get(apiRoute('/skills'), async (req, res) => {
+  res.json(await getSkills());
 });
 
 /**
@@ -671,35 +744,42 @@ app.get(apiRoute('/skills'), (req, res) => {
  *       409:
  *         description: Duplicate
  */
-app.post(apiRoute('/skills'), requireAuth, validate(skillCreateSchema), (req, res) => {
+app.post(apiRoute('/skills'), requireAuth, validate(skillCreateSchema), async (req, res) => {
   const { id, label, description, promptDirective } = req.validatedBody;
-  const skills = getSkills();
-  if (skills.find(s => s.id === id)) return res.status(409).json({ error: 'Skill already exists' });
-  const newSkill = { id, label, description: description || '', promptDirective: promptDirective || '' };
-  skills.push(newSkill);
-  skillsCache = skills;
-  res.status(201).json(newSkill);
+  try {
+    const skill = await prisma.skill.create({
+      data: { id, label, description: description || '', promptDirective: promptDirective || '' },
+    });
+    skillsCache = null;
+    res.status(201).json(skill);
+  } catch (err) {
+    if (err.code === 'P2002') return res.status(409).json({ error: 'Skill already exists' });
+    throw err;
+  }
 });
 
-app.put(apiRoute('/skills/:id'), requireAuth, validate(skillUpdateSchema), (req, res) => {
-  const skills = getSkills();
-  const skill = skills.find(s => s.id === req.params.id);
-  if (!skill) return res.status(404).json({ error: 'Skill not found' });
+app.put(apiRoute('/skills/:id'), requireAuth, validate(skillUpdateSchema), async (req, res) => {
   const { label, description, promptDirective } = req.validatedBody;
-  if (label) skill.label = label;
-  if (description !== undefined) skill.description = description;
-  if (promptDirective !== undefined) skill.promptDirective = promptDirective;
-  skillsCache = skills;
-  res.json(skill);
+  try {
+    const skill = await prisma.skill.update({
+      where: { id: req.params.id },
+      data: { label, description, promptDirective },
+    });
+    skillsCache = null;
+    res.json(skill);
+  } catch {
+    return res.status(404).json({ error: 'Skill not found' });
+  }
 });
 
-app.delete(apiRoute('/skills/:id'), requireAuth, (req, res) => {
-  const skills = getSkills();
-  const idx = skills.findIndex(s => s.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Skill not found' });
-  const removed = skills.splice(idx, 1)[0];
-  skillsCache = skills;
-  res.json({ message: 'Skill removed', skill: removed });
+app.delete(apiRoute('/skills/:id'), requireAuth, async (req, res) => {
+  try {
+    const skill = await prisma.skill.delete({ where: { id: req.params.id } });
+    skillsCache = null;
+    res.json({ message: 'Skill removed', skill });
+  } catch {
+    return res.status(404).json({ error: 'Skill not found' });
+  }
 });
 
 // ── Task Routes ──────────────────────────────────────────────
@@ -734,28 +814,41 @@ app.get(apiRoute('/tasks'), async (req, res) => {
   const page = Math.max(1, parseInt(pageStr) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(limitStr) || 50));
 
-  let filtered = taskCache;
-
-  if (status) {
-    filtered = filtered.filter(t => t.status === status.toUpperCase());
-  }
-  if (assignedAgent) {
-    filtered = filtered.filter(t => t.assignedAgent === assignedAgent);
-  }
+  const where = {};
+  if (status) where.status = status.toUpperCase();
+  if (assignedAgent) where.assignedAgent = assignedAgent;
   if (search) {
     const q = search.toLowerCase();
-    filtered = filtered.filter(t =>
-      t.title?.toLowerCase().includes(q) ||
-      t.description?.toLowerCase().includes(q)
-    );
+    where.OR = [
+      { title: { contains: q } },
+      { description: { contains: q } },
+    ];
   }
 
-  const total = filtered.length;
-  const totalPages = Math.ceil(total / limit);
-  const start = (page - 1) * limit;
-  const items = filtered.slice(start, start + limit);
+  const [total, items] = await Promise.all([
+    prisma.task.count({ where }),
+    prisma.task.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+  ]);
 
-  res.json({ items, total, page, totalPages, limit });
+  const totalPages = Math.ceil(total / limit);
+  res.json({
+    items: items.map(t => ({
+      ...t,
+      executionTrace: t.executionTrace ? JSON.parse(t.executionTrace) : null,
+      result: t.result ? JSON.parse(t.result) : null,
+      subtasks: t.subtasks ? JSON.parse(t.subtasks) : [],
+      pendingReward: t.pendingReward ? JSON.parse(t.pendingReward) : null,
+    })),
+    total,
+    page,
+    totalPages,
+    limit,
+  });
 });
 
 /**
@@ -775,30 +868,56 @@ app.get(apiRoute('/tasks'), async (req, res) => {
  *       404:
  *         description: Not found
  */
-app.get(apiRoute('/tasks/:id'), (req, res) => {
-  const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
+app.get(apiRoute('/tasks/:id'), async (req, res) => {
+  const numericId = Number(req.params.id);
+  const where = { OR: [{ id: req.params.id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  res.json(task);
+  res.json({
+    ...task,
+    executionTrace: task.executionTrace ? JSON.parse(task.executionTrace) : null,
+    result: task.result ? JSON.parse(task.result) : null,
+    subtasks: task.subtasks ? JSON.parse(task.subtasks) : [],
+    pendingReward: task.pendingReward ? JSON.parse(task.pendingReward) : null,
+  });
 });
 
-app.put(apiRoute('/tasks/:id'), requireAuth, validate(taskUpdateSchema), (req, res) => {
-  const task = taskCache.find(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+app.put(apiRoute('/tasks/:id'), requireAuth, validate(taskUpdateSchema), async (req, res) => {
   const { title, description, constraints, reward, deadline, assignedAgent } = req.validatedBody;
-  if (title) task.title = title;
-  if (description) task.description = description;
-  if (constraints !== undefined) task.constraints = constraints;
-  if (reward !== undefined) task.reward = parseFloat(reward);
-  if (deadline !== undefined) task.deadline = deadline;
-  if (assignedAgent) task.assignedAgent = assignedAgent;
-  res.json(task);
+  const numericId = Number(req.params.id);
+  const where = { OR: [{ id: req.params.id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const updated = await prisma.task.update({
+    where: { id: task.id },
+    data: {
+      title,
+      description,
+      constraints,
+      reward: reward !== undefined ? parseFloat(reward) : undefined,
+      deadline,
+      assignedAgent,
+    },
+  });
+  res.json({
+    ...updated,
+    executionTrace: updated.executionTrace ? JSON.parse(updated.executionTrace) : null,
+    result: updated.result ? JSON.parse(updated.result) : null,
+    subtasks: updated.subtasks ? JSON.parse(updated.subtasks) : [],
+    pendingReward: updated.pendingReward ? JSON.parse(updated.pendingReward) : null,
+  });
 });
 
-app.delete(apiRoute('/tasks/:id'), requireAuth, (req, res) => {
-  const idx = taskCache.findIndex(t => t.id === req.params.id || t.contractTaskId === Number(req.params.id));
-  if (idx === -1) return res.status(404).json({ error: 'Task not found' });
-  const removed = taskCache.splice(idx, 1)[0];
-  res.json({ message: 'Task removed', task: removed });
+app.delete(apiRoute('/tasks/:id'), requireAuth, async (req, res) => {
+  const numericId = Number(req.params.id);
+  const where = { OR: [{ id: req.params.id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const deleted = await prisma.task.delete({ where: { id: task.id } });
+  res.json({ message: 'Task removed', task: deleted });
 });
 
 /**
@@ -828,27 +947,40 @@ app.delete(apiRoute('/tasks/:id'), requireAuth, (req, res) => {
 app.post(apiRoute('/tasks'), requireAuth, validate(taskCreateSchema), async (req, res) => {
   const { title, description, constraints, reward, deadline, assignedAgent, creator } = req.validatedBody;
   const receipt = await bridge.postTask(title, description, Math.floor(reward) || 0, constraints || '', deadline || '');
-  const agentObj = agents.find(a => a.id === assignedAgent) || agents[0];
-  const newTask = {
-    id: `contract-${receipt.contractId}`,
-    title, description,
-    constraints: constraints || '',
-    reward: parseFloat(reward) || 0,
-    deadline: deadline || null,
-    status: 'PENDING',
-    createdAt: new Date().toISOString(),
-    executionTrace: null,
-    verificationStatus: 'NOT_VERIFIED',
-    result: null, confidenceScore: null,
-    assignedAgent: agentObj.id,
-    contractTaskId: receipt.contractId,
-    txId: receipt.txId,
-    blockNumber: receipt.blockNumber,
+  const agent = await prisma.agent.findFirst({
+    where: assignedAgent ? { id: assignedAgent } : {},
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const task = await prisma.task.create({
+    data: {
+      id: `contract-${receipt.contractId}`,
+      title,
+      description,
+      constraints: constraints || '',
+      reward: parseFloat(reward) || 0,
+      deadline: deadline || null,
+      status: 'PENDING',
+      executionTrace: null,
+      verificationStatus: 'NOT_VERIFIED',
+      result: null,
+      confidenceScore: null,
+      assignedAgent: agent?.id || null,
+      contractTaskId: receipt.contractId,
+      txId: receipt.txId,
+      blockNumber: receipt.blockNumber,
+      subtasks: JSON.stringify([]),
+      creator: creator || null,
+    },
+  });
+
+  res.status(201).json({
+    ...task,
     subtasks: [],
-    creator: creator || null,
-  };
-  taskCache.push(newTask);
-  res.status(201).json(newTask);
+    executionTrace: null,
+    result: null,
+    pendingReward: null,
+  });
 });
 
 // ── Agent Execution ──────────────────────────────────────────
@@ -874,25 +1006,42 @@ const OPENROUTER_MODEL = 'qwen/qwen-2.5-coder:free';
  */
 app.post(apiRoute('/tasks/:id/execute'), requireAuth, async (req, res) => {
   const { id } = req.params;
-  const taskIndex = taskCache.findIndex(t => t.id === id);
-  if (taskIndex === -1) return res.status(404).json({ error: 'Task not found' });
-  if (taskCache[taskIndex].status !== 'PENDING') return res.status(400).json({ error: 'Task is not in PENDING state' });
+  const numericId = Number(id);
+  const where = { OR: [{ id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (task.status !== 'PENDING') return res.status(400).json({ error: 'Task is not in PENDING state' });
 
-  const task = taskCache[taskIndex];
-  const agent = agents.find(a => a.id === task.assignedAgent) || agents[0];
-  task.status = 'EXECUTING';
-  task.executionTrace = { agent: agent.name, plan: [], startedAt: new Date().toISOString(), completedAt: null, steps: [] };
-  agent.status = 'BUSY';
+  const agent = await prisma.agent.findFirst({
+    where: task.assignedAgent ? { id: task.assignedAgent } : {},
+    orderBy: { createdAt: 'asc' },
+  });
 
-  res.json({ message: 'Execution started', taskId: id, agent: agent.name });
+  await prisma.task.update({
+    where: { id: task.id },
+    data: {
+      status: 'EXECUTING',
+      executionTrace: JSON.stringify({ agent: agent?.name || 'Unknown', plan: [], startedAt: new Date().toISOString(), completedAt: null, steps: [] }),
+    },
+  });
+
+  if (agent) {
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { status: 'BUSY' },
+    });
+  }
+
+  res.json({ message: 'Execution started', taskId: id, agent: agent?.name || 'Unknown' });
 
   try {
     if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY === 'your_openrouter_api_key_here') {
       throw new Error('OPENROUTER_API_KEY is not set. Add it to the root .env file.');
     }
 
-    const allSkills = getSkills();
-    const agentSkills = (agent.skills || []).map(sid => allSkills.find(s => s.id === sid)).filter(Boolean);
+    const skills = await getSkills();
+    const agentSkills = (agent?.skills ? JSON.parse(agent.skills) : []).map(sid => skills.find(s => s.id === sid)).filter(Boolean);
     let skillsBlock = '';
     if (agentSkills.length > 0) {
       const skillLabels = agentSkills.map(s => s.label).join(', ');
@@ -947,51 +1096,100 @@ The confidence score should reflect how well you believe you fulfilled the task.
     const confidence = Math.min(1, Math.max(0, parseFloat(parsed.confidence) || 0));
     const verified = confidence >= 0.8;
 
-    task.status = 'COMPLETED';
-    task.executionTrace.plan = reasoningTrace;
-    task.executionTrace.completedAt = new Date().toISOString();
-    task.executionTrace.steps = reasoningTrace.map((action, i) => ({ step: i + 1, action, timestamp: new Date(Date.now() - (reasoningTrace.length - i) * 500).toISOString() }));
-    task.result = { summary: aiResult.summary, data: aiResult.data };
-    task.confidenceScore = confidence;
-    task.verificationStatus = verified ? 'VERIFIED' : 'REJECTED';
-    agent.status = 'IDLE';
-    agent.completedTasks += 1;
+    const updatedExecutionTrace = {
+      agent: agent?.name || 'Unknown',
+      plan: reasoningTrace,
+      startedAt: new Date(task.createdAt).toISOString(),
+      completedAt: new Date().toISOString(),
+      steps: reasoningTrace.map((action, i) => ({ step: i + 1, action, timestamp: new Date(Date.now() - (reasoningTrace.length - i) * 500).toISOString() })),
+    };
 
-    logger.info({ taskId: id, agent: agent.name, confidence, verified }, 'Task executed');
+    await prisma.task.update({
+      where: { id: task.id },
+      data: {
+        status: 'COMPLETED',
+        executionTrace: JSON.stringify(updatedExecutionTrace),
+        result: JSON.stringify({ summary: aiResult.summary, data: aiResult.data }),
+        confidenceScore: confidence,
+        verificationStatus: verified ? 'VERIFIED' : 'REJECTED',
+      },
+    });
+
+    if (agent) {
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: { status: 'IDLE', completedTasks: { increment: 1 } },
+      });
+    }
+
+    logger.info({ taskId: id, agent: agent?.name, confidence, verified }, 'Task executed');
 
     if (verified && task.reward > 0) {
       const creatorAddr = task.creator || '0xdefault';
-      const agentAddr = `agent:${agent.id}`;
-      ensureBalance(creatorAddr);
-      ensureBalance(agentAddr);
-      if (balances[creatorAddr] >= task.reward) {
-        balances[creatorAddr] -= task.reward;
-        balances[agentAddr] += task.reward;
-        logger.info({ reward: task.reward, from: creatorAddr, to: agent.name }, 'Payment transferred');
+      const agentAddr = `agent:${agent?.id}`;
+      const creatorBal = await prisma.balance.upsert({
+        where: { address: creatorAddr },
+        update: {},
+        create: { address: creatorAddr, balance: 0 },
+      });
+      const agentBal = await prisma.balance.upsert({
+        where: { address: agentAddr },
+        update: {},
+        create: { address: agentAddr, balance: 0 },
+      });
+
+      if (creatorBal.balance >= task.reward) {
+        await prisma.$transaction([
+          prisma.balance.update({ where: { address: creatorAddr }, data: { balance: { decrement: task.reward } } }),
+          prisma.balance.update({ where: { address: agentAddr }, data: { balance: { increment: task.reward } } }),
+        ]);
+        logger.info({ reward: task.reward, from: creatorAddr, to: agent?.name }, 'Payment transferred');
       } else {
-        logger.warn({ reward: task.reward, from: creatorAddr, to: agent.name }, 'Insufficient balance for payment');
-        if (!task.pendingReward) task.pendingReward = { from: creatorAddr, to: agentAddr, amount: task.reward };
+        logger.warn({ reward: task.reward, from: creatorAddr, to: agent?.name }, 'Insufficient balance for payment');
+        await prisma.task.update({
+          where: { id: task.id },
+          data: { pendingReward: JSON.stringify({ from: creatorAddr, to: agentAddr, amount: task.reward }) },
+        });
       }
     }
 
     if (task.contractTaskId) {
       const outputStr = JSON.stringify(aiResult);
       const reasoningStr = JSON.stringify(reasoningTrace);
-      const bridgeReceipt = await bridge.submitExecution(task.contractTaskId, outputStr, reasoningStr, confidence, agent.id);
-      task.verificationStatus = bridgeReceipt.verificationStatus;
-      task.txId = bridgeReceipt.txId;
-      task.blockNumber = bridgeReceipt.blockNumber;
+      const bridgeReceipt = await bridge.submitExecution(task.contractTaskId, outputStr, reasoningStr, confidence, agent?.id);
+      await prisma.task.update({
+        where: { id: task.id },
+        data: {
+          verificationStatus: bridgeReceipt.verificationStatus,
+          txId: bridgeReceipt.txId,
+          blockNumber: bridgeReceipt.blockNumber,
+        },
+      });
     }
   } catch (err) {
     logger.error({ err, taskId: id, task: task.title }, 'Task execution failed');
-    task.status = 'FAILED';
-    task.executionTrace.completedAt = new Date().toISOString();
-    task.executionTrace.plan = task.executionTrace.plan || [];
-    task.executionTrace.steps = [...(task.executionTrace.steps || []), { step: (task.executionTrace.steps?.length || 0) + 1, action: `[ERROR] ${err.message}`, timestamp: new Date().toISOString() }];
-    task.result = { summary: `Execution failed: ${err.message}`, data: { analysis: '', findings: '', recommendation: '' } };
-    task.confidenceScore = 0;
-    task.verificationStatus = 'FAILED';
-    agent.status = 'IDLE';
+    const currentTrace = task.executionTrace ? JSON.parse(task.executionTrace) : { plan: [], steps: [] };
+    await prisma.task.update({
+      where: { id: task.id },
+      data: {
+        status: 'FAILED',
+        executionTrace: JSON.stringify({
+          ...currentTrace,
+          completedAt: new Date().toISOString(),
+          plan: currentTrace.plan || [],
+          steps: [...(currentTrace.steps || []), { step: (currentTrace.steps?.length || 0) + 1, action: `[ERROR] ${err.message}`, timestamp: new Date().toISOString() }],
+        }),
+        result: JSON.stringify({ summary: `Execution failed: ${err.message}`, data: { analysis: '', findings: '', recommendation: '' } }),
+        confidenceScore: 0,
+        verificationStatus: 'FAILED',
+      },
+    });
+    if (agent) {
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: { status: 'IDLE' },
+      });
+    }
   }
 });
 
@@ -1006,58 +1204,89 @@ The confidence score should reflect how well you believe you fulfilled the task.
  *       200:
  *         description: Agents array
  */
-app.get(apiRoute('/agents'), (req, res) => {
-  res.json(agents);
+app.get(apiRoute('/agents'), async (req, res) => {
+  const agents = await prisma.agent.findMany({ orderBy: { createdAt: 'asc' } });
+  res.json(agents.map(a => ({
+    ...a,
+    useCases: JSON.parse(a.useCases),
+    skills: JSON.parse(a.skills),
+  })));
 });
 
-app.get(apiRoute('/agents/:id'), (req, res) => {
-  const agent = agents.find(a => a.id === req.params.id);
+app.get(apiRoute('/agents/:id'), async (req, res) => {
+  const agent = await prisma.agent.findUnique({ where: { id: req.params.id } });
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  res.json(agent);
+  res.json({
+    ...agent,
+    useCases: JSON.parse(agent.useCases),
+    skills: JSON.parse(agent.skills),
+  });
 });
 
-app.post(apiRoute('/agents'), requireAuth, validate(agentCreateSchema), (req, res) => {
+app.post(apiRoute('/agents'), requireAuth, validate(agentCreateSchema), async (req, res) => {
   const { name, model, specialty, icon, price, description, useCases, selectedSkills } = req.validatedBody;
-  const accent = accentColors[agents.length % accentColors.length];
-  const newAgent = {
-    id: uuidv4(), name, model: model || 'qwen/qwen-2.5-coder:free', specialty: specialty || 'General',
-    icon: icon || 'cpu', price: parseFloat(price) || 0, description,
-    useCases: Array.isArray(useCases) ? useCases : [], rating: 0, completedTasks: 0, status: 'IDLE', accent,
-    skills: Array.isArray(selectedSkills) ? selectedSkills : [],
-  };
-  agents.push(newAgent);
-  res.status(201).json(newAgent);
+  const agentCount = await prisma.agent.count();
+  const accent = accentColors[agentCount % accentColors.length];
+
+  const agent = await prisma.agent.create({
+    data: {
+      name,
+      model: model || 'qwen/qwen-2.5-coder:free',
+      specialty: specialty || 'General',
+      icon: icon || 'cpu',
+      price: parseFloat(price) || 0,
+      description,
+      useCases: JSON.stringify(Array.isArray(useCases) ? useCases : []),
+      rating: 0,
+      completedTasks: 0,
+      status: 'IDLE',
+      accent,
+      skills: JSON.stringify(Array.isArray(selectedSkills) ? selectedSkills : []),
+    },
+  });
+
+  res.status(201).json({
+    ...agent,
+    useCases: JSON.parse(agent.useCases),
+    skills: JSON.parse(agent.skills),
+  });
 });
 
-app.put(apiRoute('/agents/:id'), requireAuth, validate(agentUpdateSchema), (req, res) => {
-  const idx = agents.findIndex(a => a.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+app.put(apiRoute('/agents/:id'), requireAuth, validate(agentUpdateSchema), async (req, res) => {
   const { name, model, specialty, icon, price, description, useCases } = req.validatedBody;
-  if (name) agents[idx].name = name;
-  if (model) agents[idx].model = model;
-  if (specialty) agents[idx].specialty = specialty;
-  if (icon) agents[idx].icon = icon;
-  if (price !== undefined) agents[idx].price = parseFloat(price);
-  if (description) agents[idx].description = description;
-  if (useCases) agents[idx].useCases = Array.isArray(useCases) ? useCases : agents[idx].useCases;
-  res.json(agents[idx]);
+  try {
+    const agent = await prisma.agent.update({
+      where: { id: req.params.id },
+      data: {
+        name,
+        model,
+        specialty,
+        icon,
+        price: price !== undefined ? parseFloat(price) : undefined,
+        description,
+        useCases: useCases ? JSON.stringify(useCases) : undefined,
+      },
+    });
+    res.json({
+      ...agent,
+      useCases: JSON.parse(agent.useCases),
+      skills: JSON.parse(agent.skills),
+    });
+  } catch {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
 });
 
-app.delete(apiRoute('/agents/:id'), requireAuth, (req, res) => {
-  const idx = agents.findIndex(a => a.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
-  const removed = agents.splice(idx, 1)[0];
-  res.json({ message: 'Agent removed', agent: removed });
+app.delete(apiRoute('/agents/:id'), requireAuth, async (req, res) => {
+  try {
+    const agent = await prisma.agent.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Agent removed', agent });
+  } catch {
+    return res.status(404).json({ error: 'Agent not found' });
+  }
 });
 
 // ── Payment / Token System ─────────────────────────────────────
-let balances = {};
-
-function ensureBalance(address) {
-  if (!balances[address]) balances[address] = 0;
-  return balances[address];
-}
-
 /**
  * @openapi
  * /balances:
@@ -1068,73 +1297,126 @@ function ensureBalance(address) {
  *       200:
  *         description: Balances array
  */
-app.get(apiRoute('/balances'), (req, res) => {
-  res.json(Object.entries(balances).map(([address, balance]) => ({ address, balance })));
+app.get(apiRoute('/balances'), async (req, res) => {
+  const balances = await prisma.balance.findMany();
+  res.json(balances);
 });
 
-app.get(apiRoute('/balances/:address'), (req, res) => {
-  const balance = ensureBalance(req.params.address);
-  res.json({ address: req.params.address, balance });
+app.get(apiRoute('/balances/:address'), async (req, res) => {
+  const balance = await prisma.balance.upsert({
+    where: { address: req.params.address },
+    update: {},
+    create: { address: req.params.address, balance: 0 },
+  });
+  res.json({ address: balance.address, balance: balance.balance });
 });
 
-app.post(apiRoute('/faucet'), validate(faucetSchema), (req, res) => {
+app.post(apiRoute('/faucet'), validate(faucetSchema), async (req, res) => {
   const { address } = req.validatedBody;
-  ensureBalance(address);
-  balances[address] += 1000;
+  const balance = await prisma.balance.upsert({
+    where: { address },
+    update: { balance: { increment: 1000 } },
+    create: { address, balance: 1000 },
+  });
   logger.info({ address, amount: 1000 }, 'Faucet claimed');
-  res.json({ address, balance: balances[address], message: '1000 GLR claimed' });
+  res.json({ address: balance.address, balance: balance.balance, message: '1000 GLR claimed' });
 });
 
-app.post(apiRoute('/transfer'), validate(transferSchema), (req, res) => {
+app.post(apiRoute('/transfer'), validate(transferSchema), async (req, res) => {
   const { from, to, amount } = req.validatedBody;
-  ensureBalance(from); ensureBalance(to);
-  const amt = parseFloat(amount);
-  if (balances[from] < amt) return res.status(400).json({ error: 'Insufficient balance' });
-  balances[from] -= amt;
-  balances[to] += amt;
-  logger.info({ from, to, amount: amt }, 'Transfer completed');
-  res.json({ from, to, amount: amt, fromBalance: balances[from], toBalance: balances[to] });
+  const fromBal = await prisma.balance.upsert({
+    where: { address: from },
+    update: {},
+    create: { address: from, balance: 0 },
+  });
+  await prisma.balance.upsert({
+    where: { address: to },
+    update: {},
+    create: { address: to, balance: 0 },
+  });
+
+  if (fromBal.balance < amount) {
+    return res.status(400).json({ error: 'Insufficient balance' });
+  }
+
+  const [updatedFrom, updatedTo] = await prisma.$transaction([
+    prisma.balance.update({ where: { address: from }, data: { balance: { decrement: amount } } }),
+    prisma.balance.update({ where: { address: to }, data: { balance: { increment: amount } } }),
+  ]);
+
+  logger.info({ from, to, amount }, 'Transfer completed');
+  res.json({ from, to, amount, fromBalance: updatedFrom.balance, toBalance: updatedTo.balance });
 });
 
 // ── Agent-to-Agent Task Routing ───────────────────────────────
 app.post(apiRoute('/tasks/:id/delegate'), async (req, res) => {
   const { id } = req.params;
-  const task = taskCache.find(t => t.id === id);
+  const numericId = Number(id);
+  const where = { OR: [{ id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (task.status !== 'EXECUTING') return res.status(400).json({ error: 'Task must be in EXECUTING state' });
   const { title, description, assignedAgent, reward } = req.body;
   if (!title || !assignedAgent) return res.status(400).json({ error: 'title and assignedAgent required' });
-  const subtaskAgent = agents.find(a => a.id === assignedAgent);
+
+  const subtaskAgent = await prisma.agent.findUnique({ where: { id: assignedAgent } });
   if (!subtaskAgent) return res.status(404).json({ error: 'Agent not found' });
-  if (!task.subtasks) task.subtasks = [];
+
+  const subtasks = task.subtasks ? JSON.parse(task.subtasks) : [];
   const subtask = { id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, title, description: description || '', reward: parseFloat(reward) || 0, assignedAgent, status: 'PENDING', parentTaskId: id, createdAt: new Date().toISOString(), result: null };
-  task.subtasks.push(subtask);
+  subtasks.push(subtask);
+
+  await prisma.task.update({
+    where: { id: task.id },
+    data: { subtasks: JSON.stringify(subtasks) },
+  });
+
   logger.info({ subtaskId: subtask.id, taskId: id, assignedTo: subtaskAgent.name }, 'Subtask delegated');
   res.status(201).json(subtask);
 });
 
 app.post(apiRoute('/tasks/:id/subtasks/:subId/execute'), async (req, res) => {
   const { id, subId } = req.params;
-  const task = taskCache.find(t => t.id === id);
+  const numericId = Number(id);
+  const where = { OR: [{ id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  const subtask = task.subtasks?.find(s => s.id === subId);
+  const subtasks = task.subtasks ? JSON.parse(task.subtasks) : [];
+  const subtask = subtasks.find(s => s.id === subId);
   if (!subtask) return res.status(404).json({ error: 'Subtask not found' });
   if (subtask.status !== 'PENDING') return res.status(400).json({ error: 'Subtask not PENDING' });
   const { output, summary } = req.body;
   subtask.status = 'COMPLETED';
   subtask.completedAt = new Date().toISOString();
   subtask.result = { output: output || '', summary: summary || 'Subtask completed' };
-  const allDone = task.subtasks.every(s => s.status === 'COMPLETED');
-  if (allDone && task.status === 'EXECUTING') task.status = 'PENDING';
+
+  const allDone = subtasks.every(s => s.status === 'COMPLETED');
+  if (allDone && task.status === 'EXECUTING') {
+    await prisma.task.update({
+      where: { id: task.id },
+      data: { status: 'PENDING', subtasks: JSON.stringify(subtasks) },
+    });
+  } else {
+    await prisma.task.update({
+      where: { id: task.id },
+      data: { subtasks: JSON.stringify(subtasks) },
+    });
+  }
+
   logger.info({ subtaskId: subId, taskId: id }, 'Subtask completed');
   res.json(subtask);
 });
 
-app.get(apiRoute('/tasks/:id/subtasks'), (req, res) => {
+app.get(apiRoute('/tasks/:id/subtasks'), async (req, res) => {
   const { id } = req.params;
-  const task = taskCache.find(t => t.id === id);
+  const numericId = Number(id);
+  const where = { OR: [{ id }] };
+  if (!isNaN(numericId)) where.OR.push({ contractTaskId: numericId });
+  const task = await prisma.task.findFirst({ where });
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  res.json(task.subtasks || []);
+  res.json(task.subtasks ? JSON.parse(task.subtasks) : []);
 });
 
 // ── Start Server ─────────────────────────────────────────────
@@ -1146,6 +1428,8 @@ const appReady = new Promise((resolve) => {
 
 async function start() {
   await initRedis();
+  await prisma.$connect();
+  logger.info('Database connected');
   await bridge.init(logger);
 
   if (bridge.isMockMode() && process.env.GENLAYER_MODE === 'real') {
@@ -1156,19 +1440,22 @@ async function start() {
 
   const modeLabel = bridge.isMockMode() ? 'Mock Onchain Mode' : 'GenLayer Live Mode';
   logger.info({ mode: modeLabel }, 'Bridge initialized');
-  if (bridge.isMockMode()) {
-    taskCache.push(...seedTasks);
-  }
+
+  await syncSkillsToDb();
+  await seedDatabase();
 
   if (bridge.isMockMode()) {
     logger.warn('Running in mock mode — no real GenLayer connection established');
   } else {
-    logger.info(`Connected to ${bridge.getNetworkName()} — Task count: ${taskCache.length}`);
+    const taskCount = await prisma.task.count();
+    logger.info(`Connected to ${bridge.getNetworkName()} — Task count: ${taskCount}`);
   }
 
   if (!process.env.VERCEL) {
-    serverInstance = app.listen(PORT, () => {
-      logger.info({ port: PORT, mode: modeLabel, tasks: taskCache.length, agents: agents.length }, 'Server started');
+    serverInstance = app.listen(PORT, async () => {
+      const taskCount = await prisma.task.count();
+      const agentCount = await prisma.agent.count();
+      logger.info({ port: PORT, mode: modeLabel, tasks: taskCount, agents: agentCount }, 'Server started');
       app.emit('ready');
     });
   } else {
@@ -1204,6 +1491,13 @@ async function shutdown(signal) {
     }
   }
 
+  try {
+    await prisma.$disconnect();
+    logger.info('Database connection closed');
+  } catch (err) {
+    logger.warn({ err }, 'Error closing database connection');
+  }
+
   setTimeout(() => {
     logger.warn('Forced shutdown after timeout');
     process.exit(1);
@@ -1217,3 +1511,4 @@ module.exports = app;
 module.exports.appReady = appReady;
 module.exports.closeServer = () => serverInstance?.close();
 module.exports.getRedisClient = getRedisClient;
+module.exports.prisma = prisma;
