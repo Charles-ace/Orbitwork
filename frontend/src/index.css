@@ -78,6 +78,9 @@ body::before {
   max-width: 1200px;
   margin: 0 auto;
   padding: 0 2rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Animation Keyframes ────────────────────────────── */
@@ -988,39 +991,34 @@ label {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
-.network-badge-contract {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  opacity: 0.7;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
-.network-badge-contract:hover {
-  opacity: 1;
-}
-.network-badge-sep {
-  margin-right: 0.15rem;
-  opacity: 0.4;
-}
 
 /* ── Footer ─────────────────────────────────────────── */
 .app-footer {
-  margin-top: 4rem;
-  padding: 1.5rem 0;
+  margin-top: auto;
+  padding: 1.5rem 0 1.9rem;
   border-top: 1px solid var(--border-color);
+  position: relative;
+}
+.app-footer::before {
+  content: '';
+  position: absolute;
+  inset: -1px 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 163, 0.25), transparent);
+  pointer-events: none;
 }
 .footer-content {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 1rem 1.25rem;
 }
 .footer-left {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
 }
 .footer-brand {
   display: flex;
@@ -1076,39 +1074,91 @@ label {
 .footer-network-badge[data-mode="mock"] .footer-network-dot {
   background: var(--warning);
 }
-.footer-contract {
-  display: inline-flex;
+
+.app-footer[data-page="resources"] .footer-content {
+  flex-direction: column;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.6rem;
-  border-radius: 6px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  cursor: pointer;
-  font-size: 0.7rem;
-  font-family: monospace;
-  transition: all 0.2s;
+  text-align: center;
+}
+.app-footer[data-page="resources"] .footer-left {
+  justify-content: center;
+}
+.app-footer[data-page="resources"] .footer-right {
+  justify-content: center;
+}
+
+/* ── Resources Panel ────────────────────────────────── */
+.resources-panel {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2.5rem 2rem 2.25rem;
+  text-align: center;
+  border-radius: 24px;
+  border: 1px solid rgba(0, 255, 163, 0.12);
+  background:
+    radial-gradient(circle at top, rgba(0, 255, 163, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
+  box-shadow: 0 0 0 1px rgba(0, 255, 163, 0.04), 0 20px 60px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(14px);
+}
+.resources-badge {
+  display: inline-flex;
+  margin-bottom: 1rem;
+}
+.resources-title {
+  margin-bottom: 1rem;
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+.resources-copy {
+  max-width: 48rem;
+  margin: 0 auto 1.75rem;
+  font-size: 1rem;
   color: var(--text-secondary);
 }
-.footer-contract:hover {
-  border-color: rgba(0, 255, 163, 0.2);
-  color: var(--text-primary);
+.resources-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 1.5rem;
 }
-.footer-contract-label {
+.resources-primary-action {
+  min-width: 250px;
+  justify-content: center;
+}
+.resources-note {
+  font-size: 0.75rem;
   color: var(--text-muted);
-  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
-.footer-contract-address {
-  color: var(--accent-primary);
-  background: none;
-  font-family: monospace;
+.resources-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
 }
-.footer-copy-icon {
-  opacity: 0.5;
-  transition: opacity 0.2s;
+.resources-card {
+  padding: 1rem 1rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
 }
-.footer-contract:hover .footer-copy-icon {
-  opacity: 1;
+.resources-card-label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+.resources-card-value {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 @media (max-width: 768px) {
@@ -1123,5 +1173,15 @@ label {
   .footer-sep { display: none; }
   .footer-right {
     justify-content: center;
+  }
+  .resources-panel {
+    padding: 2rem 1.25rem 1.75rem;
+  }
+  .resources-grid {
+    grid-template-columns: 1fr;
+  }
+  .resources-primary-action {
+    width: 100%;
+    min-width: 0;
   }
 }

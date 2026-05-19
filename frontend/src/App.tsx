@@ -4,7 +4,7 @@ import { ethers } from 'ethers';
 import {
   Plus, Search, Terminal, Clock, Zap, Target, Bot, Sun, Moon,
   CheckCircle, BarChart3, Code, PenLine, Shield, Cpu, Sparkles, Rocket, Users,
-  X, Book, GitFork, Wallet, Menu, Copy, ExternalLink
+  X, Book, GitFork, Wallet, Menu
 } from 'lucide-react';
 
 // Custom premium icons from public assets
@@ -262,14 +262,6 @@ function App() {
   const goToAgents = () => { setPage('agents'); setSelectedTask(null); closeMobile(); };
   const goToLanding = () => { setPage('landing'); setSelectedTask(null); closeMobile(); };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).catch(() => {});
-  };
-
-  const blockExplorerUrl = networkInfo?.network === 'bradbury'
-    ? `https://explorer-bradbury.genlayer.com/address/${networkInfo?.contractAddress}`
-    : null;
-
   return (
     <>
       <div className="app-container">
@@ -294,13 +286,6 @@ function App() {
                 <span className="network-badge-name">
                   {networkBadgeLabel}
                 </span>
-                {networkInfo.contractAddress && (
-                  <span className="network-badge-contract" onClick={() => copyToClipboard(networkInfo.contractAddress!)} title="Copy contract address">
-                    <span className="network-badge-sep">|</span>
-                    {networkInfo.contractAddress.slice(0, 8)}...{networkInfo.contractAddress.slice(-4)}
-                    <Copy size={11} style={{ opacity: 0.6 }} />
-                  </span>
-                )}
               </div>
             )}
             <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
@@ -425,16 +410,32 @@ function App() {
         )}
 
         {page === 'resources' && (
-          <section className="fade-in-up" style={{ maxWidth: '600px', margin: '0 auto', textAlign: 'center' }}>
-            <div className="hero-badge" style={{ marginBottom: '1rem', display: 'inline-flex' }}>
+          <section className="resources-panel fade-in-up">
+            <div className="hero-badge resources-badge">
               <Book size={14} /> Resources
             </div>
-            <h1 style={{ marginBottom: '1rem' }}>Documentation & Source Code</h1>
-            <p style={{ marginBottom: '2rem', opacity: 0.7 }}>Full documentation and API reference are on GitHub.</p>
-            <a href="https://github.com/Charles-ace/Orbitjob" target="_blank" rel="noopener noreferrer"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', padding: '0.75rem 1.5rem', borderRadius: '10px', background: 'var(--accent-primary)', color: '#fff', textDecoration: 'none', fontWeight: 600, fontSize: '1rem' }}>
-              <GitFork size={20} /> View on GitHub
-            </a>
+            <h1 className="resources-title">Documentation & Source Code</h1>
+            <p className="resources-copy">Everything you need to inspect the system lives in one place. The repo is the source of truth for the app, contract flow, and deployment setup.</p>
+            <div className="resources-actions">
+              <a href="https://github.com/Charles-ace/Orbitjob" target="_blank" rel="noopener noreferrer" className="btn btn-green resources-primary-action">
+                <GitFork size={18} /> View on GitHub
+              </a>
+              <div className="resources-note">Live on {isLiveNetwork ? `GenLayer ${networkName === 'bradbury' ? 'Bradbury' : networkInfo?.network}` : 'Mock Mode'}</div>
+            </div>
+            <div className="resources-grid">
+              <div className="resources-card">
+                <span className="resources-card-label">Frontend</span>
+                <span className="resources-card-value">React + Vite</span>
+              </div>
+              <div className="resources-card">
+                <span className="resources-card-label">Network</span>
+                <span className="resources-card-value">{networkBadgeLabel}</span>
+              </div>
+              <div className="resources-card">
+                <span className="resources-card-label">Deployment</span>
+                <span className="resources-card-value">Vercel</span>
+              </div>
+            </div>
           </section>
         )}
 
@@ -489,14 +490,9 @@ function App() {
                     <div style={{ marginBottom: '1.5rem' }}>
                       <p style={{ fontSize: '0.9rem' }}>{selectedTask.description}</p>
                     </div>
-                    {(selectedTask.txId || networkInfo?.contractAddress) && (
+                    {(selectedTask.txId || selectedTask.blockNumber) && (
                       <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', background: 'var(--card-bg)', padding: '0.5rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid var(--border)' }}>
-                        {networkInfo?.contractAddress && (
-                          <div>Contract: <span style={{ color: 'var(--accent-primary)' }}>{networkInfo.contractAddress.slice(0, 10)}...{networkInfo.contractAddress.slice(-6)}</span></div>
-                        )}
-                        {selectedTask.txId && (
-                          <div style={{ marginTop: '0.2rem' }}>TX: <span style={{ color: 'var(--accent-primary)' }}>{selectedTask.txId}</span></div>
-                        )}
+                        {selectedTask.txId && <div>TX: <span style={{ color: 'var(--accent-primary)' }}>{selectedTask.txId}</span></div>}
                         {selectedTask.blockNumber && (
                           <div style={{ marginTop: '0.2rem' }}>Block: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.blockNumber}</span></div>
                         )}
@@ -672,8 +668,8 @@ function App() {
         </div>
       )}
 
-        {/* ── Footer ─────────────────────────────────────── */}
-        <footer className="app-footer">
+      {/* ── Footer ─────────────────────────────────────── */}
+        <footer className="app-footer" data-page={page}>
           <div className="footer-content">
             <div className="footer-left">
               <span className="footer-brand">
@@ -690,22 +686,6 @@ function App() {
                     <span className="footer-network-dot" />
                     {footerNetworkLabel}
                   </span>
-                  {networkInfo.contractAddress && (
-                    <span className="footer-contract" onClick={() => copyToClipboard(networkInfo.contractAddress!)} title="Copy contract address">
-                      <span className="footer-contract-label">Contract</span>
-                      <code className="footer-contract-address">
-                        {networkInfo.contractAddress.slice(0, 10)}...{networkInfo.contractAddress.slice(-8)}
-                      </code>
-                      <Copy size={12} className="footer-copy-icon" />
-                      {blockExplorerUrl && (
-                        <a href={blockExplorerUrl} target="_blank" rel="noopener noreferrer"
-                          onClick={e => e.stopPropagation()}
-                          title="View on block explorer">
-                          <ExternalLink size={12} />
-                        </a>
-                      )}
-                    </span>
-                  )}
                 </>
               )}
             </div>
