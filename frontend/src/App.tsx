@@ -140,6 +140,8 @@ function App() {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
+  const [taskSearch, setTaskSearch] = useState('');
+  const [taskStatusFilter, setTaskStatusFilter] = useState<'ALL' | Task['status']>('ALL');
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -233,6 +235,17 @@ function App() {
     ? (networkName === 'bradbury' ? 'Bradbury' : (networkInfo?.network || 'live'))
     : 'mock';
   const recommendedTaskAgent = getRecommendedAgent(newTask.title, newTask.description, agents);
+  const featuredTasks = [...tasks].slice(0, 3);
+  const featuredAgents = [...agents].sort((a, b) => b.rating - a.rating || b.completedTasks - a.completedTasks).slice(0, 4);
+  const visibleTasks = tasks.filter(task => {
+    const matchesStatus = taskStatusFilter === 'ALL' || task.status === taskStatusFilter;
+    const query = taskSearch.trim().toLowerCase();
+    if (!query) return matchesStatus;
+    const assigned = agents.find(agent => agent.id === task.assignedAgent);
+    const haystack = `${task.title} ${task.description} ${task.status} ${assigned?.name || ''} ${assigned?.specialty || ''}`.toLowerCase();
+    return matchesStatus && haystack.includes(query);
+  });
+  const resolveAgent = (agentId?: string) => agents.find(agent => agent.id === agentId);
 
   const switchToGenLayer = async (provider: ethers.providers.Web3Provider) => {
     try {
@@ -362,91 +375,175 @@ function App() {
         {/* ── Landing Page ─────────────────────────────── */}
         {page === 'landing' && (
           <>
-            <section className="hero fade-in-up">
-              <div className="hero-badge">
-                <Sparkles size={14} />
-                Orbitjob Alpha — AI Task Marketplace
+            <section className="market-hero fade-in-up">
+              <div className="market-hero-copy">
+                <div className="hero-badge market-badge">
+                  <Sparkles size={14} />
+                  Live AI labor market
+                </div>
+                <h1 className="market-title">
+                  Hire verified AI agents like a premium job board.
+                </h1>
+                <p className="market-copy">
+                  Orbitjob is the marketplace for posting work, matching it to the right agent, and settling the outcome on GenLayer Bradbury.
+                </p>
+                <div className="hero-actions market-actions">
+                  <button className="btn btn-green" onClick={() => { goToTasks(); setShowForm(true); }}>
+                    <Rocket size={18} /> Post a Job
+                  </button>
+                  <button className="btn btn-ghost" onClick={goToAgents}>
+                    <Users size={18} /> Browse Agents
+                  </button>
+                </div>
+                <div className="market-pills">
+                  <span>Bradbury live</span>
+                  <span>Verified execution</span>
+                  <span>Wallet-native workflow</span>
+                  <span>Agent marketplace</span>
+                </div>
+                <div className="market-metrics">
+                  <div className="market-metric">
+                    <div className="market-metric-value">{agents.length}</div>
+                    <div className="market-metric-label">Agents</div>
+                  </div>
+                  <div className="market-metric">
+                    <div className="market-metric-value">{tasks.filter(t => t.status === 'COMPLETED').length}</div>
+                    <div className="market-metric-label">Verified jobs</div>
+                  </div>
+                  <div className="market-metric">
+                    <div className="market-metric-value">{networkInfo?.network || 'Bradbury'}</div>
+                    <div className="market-metric-label">Network</div>
+                  </div>
+                  <div className="market-metric">
+                    <div className="market-metric-value">{networkInfo?.mode || 'live'}</div>
+                    <div className="market-metric-label">Mode</div>
+                  </div>
+                </div>
               </div>
-              <h1 className="hero-title">
-                The future of intelligence is{' '}
-                <span className="hero-title-highlight">
-                  <span className="hero-icon-group">
-                    <img src={humanIcon} alt="Human" className="hero-inline-icon" />
-                    <span>human</span>
-                  </span>
-                  <Zap size={32} className="hero-zap-icon" fill="var(--accent-primary)" />
-                  <span className="hero-icon-group">
-                    <img src={aiIcon} alt="AI" className="hero-inline-icon" />
-                    <span>AI</span>
-                  </span>
-                </span>
-              </h1>
-              <p className="hero-subtitle">
-                We help you deploy the agents you need, verify the tasks you have,
-                and close the gap between AI and Onchain verification.
-              </p>
-              <div className="hero-actions">
-                <button className="btn btn-green" onClick={() => { goToTasks(); setShowForm(true); }}>
-                  <Rocket size={18} /> Join The Community
-                </button>
-                <button className="btn btn-ghost" onClick={goToAgents}>
-                  <Users size={18} /> Meet the Agents
-                </button>
+              <div className="market-hero-board">
+                <div className="market-visual-frame">
+                  <img src={humanIcon} alt="" aria-hidden="true" className="market-floating-image human" />
+                  <img src={aiIcon} alt="" aria-hidden="true" className="market-floating-image ai" />
+                  <div className="market-card market-card-task">
+                    <span className="market-card-kicker">Featured task</span>
+                    <h3>{featuredTasks[0]?.title || 'Post your first task'}</h3>
+                    <p>{featuredTasks[0]?.description || 'Open the task board to find the right AI agent for the job.'}</p>
+                    <div className="market-card-foot">
+                      <span>{featuredTasks[0] ? `${featuredTasks[0].reward} GLR` : '0 GLR'}</span>
+                      <span>{featuredTasks[0]?.status || 'OPEN'}</span>
+                    </div>
+                  </div>
+                  <div className="market-card market-card-agent">
+                    <span className="market-card-kicker">Top agent</span>
+                    <h3>{featuredAgents[0]?.name || 'Antigravity Alpha'}</h3>
+                    <p>{featuredAgents[0]?.specialty || 'General purpose AI'}</p>
+                    <div className="market-card-foot">
+                      <span>{featuredAgents[0] ? `${featuredAgents[0].rating.toFixed(1)} rating` : 'Ready to work'}</span>
+                      <span>{featuredAgents[0] ? `${featuredAgents[0].completedTasks}+ jobs` : 'Marketplace ready'}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="market-live-strip">
+                  <div>
+                    <strong>{tasks.length}</strong>
+                    <span>Live jobs</span>
+                  </div>
+                  <div>
+                    <strong>{featuredAgents.length}</strong>
+                    <span>Top agents</span>
+                  </div>
+                  <div>
+                    <strong>GLR</strong>
+                    <span>Settlement</span>
+                  </div>
+                </div>
               </div>
             </section>
 
-            <section style={{ maxWidth: '800px', margin: '4rem auto 0', padding: '0 1rem' }}>
-              <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                <div className="hero-badge" style={{ display: 'inline-flex' }}><Book size={14} /> How Orbitjob Works</div>
-                <h2 style={{ marginTop: '0.75rem', fontSize: '1.6rem' }}>From task to verified result in seconds</h2>
+            <section className="marketplace-feed fade-in-up">
+              <div className="section-head">
+                <div className="hero-badge" style={{ display: 'inline-flex' }}><Book size={14} /> Marketplace snapshot</div>
+                <h2>Live opportunities and verified talent</h2>
+                <p>Browse the hottest jobs and the strongest agents in one place, like a modern work marketplace.</p>
               </div>
-              <div className="stagger">
-                <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Target size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>1. Post a Task</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>Go to the Tasks page, click "Post Task", fill in a title, description, reward in GLR, and assign an AI agent.</p>
+              <div className="market-grid">
+                <div className="market-list">
+                  <div className="market-list-head">
+                    <h3>Open jobs</h3>
+                    <span>{tasks.length} listings</span>
+                  </div>
+                  <div className="stagger">
+                    {featuredTasks.map(task => {
+                      const agent = resolveAgent(task.assignedAgent);
+                      return (
+                        <div key={task.id} className="market-feed-card card glass">
+                          <div className="market-feed-card-top">
+                            <div>
+                              <div className="market-feed-title">{task.title}</div>
+                              <div className="market-feed-subtitle">{agent ? `Assigned to ${agent.name}` : 'Auto-assign available'}</div>
+                            </div>
+                            <span className={`badge badge-${task.status.toLowerCase()}`}>{task.status}</span>
+                          </div>
+                          <p className="market-feed-copy">{task.description}</p>
+                          <div className="market-feed-meta">
+                            <span><Zap size={14} /> {task.reward} GLR</span>
+                            <span><Clock size={14} /> {new Date(task.createdAt).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Bot size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>2. Execute with AI</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The assigned AI agent analyzes the task via OpenRouter, produces reasoning steps and a real-time result.</p>
-                </div>
-                <div className="card glass fade-in" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}><Shield size={20} color="var(--accent-primary)" /><h3 style={{ margin: 0 }}>3. Onchain Verification</h3></div>
-                  <p style={{ fontSize: '0.9rem', opacity: 0.8 }}>The GenLayer network confirms the result onchain. Tasks get a "VERIFIED" status with a transaction hash and block number.</p>
+                <div className="market-list">
+                  <div className="market-list-head">
+                    <h3>Top agents</h3>
+                    <span>{featuredAgents.length} curated</span>
+                  </div>
+                  <div className="stagger">
+                    {featuredAgents.map(agent => (
+                      <div key={agent.id} className={`market-feed-card card glass agent-card accent-${agent.accent}`}>
+                        <div className="agent-header">
+                          <div className={`agent-avatar ${agent.accent}`}>{iconMap[agent.icon] || <Cpu size={18} />}</div>
+                          <div className="agent-info">
+                            <div className="agent-name">{agent.name}</div>
+                            <div className="agent-model">{agent.specialty}</div>
+                          </div>
+                        </div>
+                        <div className="agent-tags">
+                          <span className={`agent-tag ${agent.accent}`}>{agent.status}</span>
+                          <span className={`agent-tag ${agent.accent}`}>{agent.rating.toFixed(1)} rating</span>
+                          <span className={`agent-tag ${agent.accent}`}>{agent.completedTasks}+ jobs</span>
+                        </div>
+                        <p className="agent-description">{agent.description}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </section>
 
-            <section className="stats-row fade-in-up">
-              <div className="stat-item">
-                <div className="stat-number">{agents.length}+</div>
-                <div className="stat-label">AI Agents</div>
+            <section className="market-process fade-in-up">
+              <div className="section-head">
+                <div className="hero-badge" style={{ display: 'inline-flex' }}><Target size={14} /> How it works</div>
+                <h2>From brief to verified delivery</h2>
+                <p>A simple marketplace flow with onchain verification at the end.</p>
               </div>
-              <div className="stat-item">
-                <div className="stat-number">{tasks.filter(t => t.status === 'COMPLETED').length}+</div>
-                <div className="stat-label">Tasks Completed</div>
-              </div>
-              <div className="stat-item">
-                <div className="stat-number">{networkInfo?.mode || 'mock'}</div>
-                <div className="stat-label">Network Mode</div>
-              </div>
-              <div className="stat-item">
-                <div className="stat-number">{networkInfo?.network || 'local'}</div>
-                <div className="stat-label">Network</div>
-              </div>
-            </section>
-
-            <section className="cta-section fade-in-up">
-              <h2 style={{ marginBottom: '1rem' }}>Ready to Deploy Intelligent Agents?</h2>
-              <p style={{ marginBottom: '2rem', maxWidth: '500px', margin: '0 auto 2rem' }}>
-                Post a task, assign an AI agent, and get onchain-verified results in seconds.
-              </p>
-              <div className="hero-actions" style={{ justifyContent: 'center' }}>
-                <button className="btn btn-green" onClick={() => { goToTasks(); setShowForm(true); }}>
-                  <Rocket size={18} /> Get Started
-                </button>
-                <button className="btn btn-ghost" onClick={goToAgents}>
-                  <Bot size={18} /> Browse Agents
-                </button>
+              <div className="market-steps stagger">
+                <div className="card glass market-step">
+                  <div className="market-step-number">01</div>
+                  <h3>Post a task</h3>
+                  <p>Add a job, budget, and deadline. Orbitjob recommends the best-fit agent for you.</p>
+                </div>
+                <div className="card glass market-step">
+                  <div className="market-step-number">02</div>
+                  <h3>Agent execution</h3>
+                  <p>The chosen agent reasons through the brief and produces a structured result.</p>
+                </div>
+                <div className="card glass market-step">
+                  <div className="market-step-number">03</div>
+                  <h3>Verified settlement</h3>
+                  <p>GenLayer Bradbury verifies the result so buyers can trust the output.</p>
+                </div>
               </div>
             </section>
           </>
@@ -489,72 +586,121 @@ function App() {
               <button className="nav-tab active" onClick={goToTasks}><Target size={16} /> Tasks</button>
               <button className="nav-tab" onClick={goToAgents}><Bot size={16} /> Agents</button>
             </div>
-            <div className="task-layout" style={{ display: 'grid', gridTemplateColumns: selectedTask ? '1fr 1.5fr' : '1fr', gap: '2rem' }}>
+            <section className="task-market-hero fade-in-up">
+              <div className="section-head section-head-left">
+                <div className="hero-badge" style={{ display: 'inline-flex' }}><Book size={14} /> Live task board</div>
+                <h2>Browse open work like a marketplace.</h2>
+                <p>Search jobs, filter by status, and open any listing to inspect the assigned agent and result history.</p>
+              </div>
+              <div className="task-toolbar">
+                <div className="task-search">
+                  <Search size={16} />
+                  <input
+                    value={taskSearch}
+                    onChange={e => setTaskSearch(e.target.value)}
+                    placeholder="Search tasks, agents, or keywords"
+                  />
+                </div>
+                <div className="task-filter-chips">
+                  {(['ALL', 'PENDING', 'EXECUTING', 'COMPLETED', 'FAILED'] as const).map(status => (
+                    <button
+                      key={status}
+                      className={`task-filter-chip ${taskStatusFilter === status ? 'active' : ''}`}
+                      onClick={() => setTaskStatusFilter(status)}
+                    >
+                      {status === 'ALL' ? 'All' : status}
+                    </button>
+                  ))}
+                </div>
+                <button className="btn btn-primary" onClick={() => { goToTasks(); setShowForm(true); }}>
+                  <Plus size={17} /> Post Task
+                </button>
+              </div>
+            </section>
+
+            <div className="task-layout marketplace-layout" style={{ display: 'grid', gridTemplateColumns: selectedTask ? 'minmax(0, 1.1fr) minmax(320px, 0.9fr)' : '1fr', gap: '1.5rem' }}>
               <section>
-                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Target size={22} /> Available Tasks</h2>
-                {tasks.length === 0 ? (
-                  <div className="card glass fade-in" style={{ textAlign: 'center', padding: '3rem' }}>
+                <div className="task-list-header">
+                  <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: 0 }}><Target size={22} /> Marketplace Listings</h2>
+                  <div className="task-list-count">{visibleTasks.length} of {tasks.length}</div>
+                </div>
+                {visibleTasks.length === 0 ? (
+                  <div className="card glass fade-in market-empty">
                     <Search size={44} style={{ marginBottom: '1rem', opacity: 0.2 }} />
-                    <p>No tasks found. Post one to get started.</p>
+                    <p>No tasks match your filters. Try a different search or post a new job.</p>
                   </div>
                 ) : (
-                  <div className="stagger">
-                    {tasks.map(task => (
-                      <div key={task.id} className={`card glass ${selectedTask?.id === task.id ? 'card-active' : ''}`}
-                        style={{ cursor: 'pointer' }} onClick={() => setSelectedTask(task)}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                          <h3>{task.title}</h3>
-                          <span className={`badge badge-${task.status.toLowerCase()}`}>{task.status}</span>
-                        </div>
-                        <p style={{ marginBottom: '0.75rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', fontSize: '0.9rem' }}>
-                          {task.description}
-                        </p>
-                        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.85rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <Zap size={14} color="var(--accent-primary)" /> <span>{task.reward} GLR</span>
+                  <div className="task-feed stagger">
+                    {visibleTasks.map(task => {
+                      const agent = resolveAgent(task.assignedAgent);
+                      return (
+                        <button
+                          key={task.id}
+                          className={`card glass task-market-card ${selectedTask?.id === task.id ? 'card-active' : ''}`}
+                          onClick={() => setSelectedTask(task)}
+                        >
+                          <div className="task-market-top">
+                            <div>
+                              <div className="task-market-title">{task.title}</div>
+                              <div className="task-market-subtitle">{agent ? `Assigned to ${agent.name}` : 'Auto-assigned'}</div>
+                            </div>
+                            <span className={`badge badge-${task.status.toLowerCase()}`}>{task.status}</span>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            <Clock size={14} /> <span>{new Date(task.createdAt).toLocaleDateString()}</span>
+                          <p className="task-market-copy">{task.description}</p>
+                          <div className="task-market-meta">
+                            <div><Zap size={14} color="var(--accent-primary)" /> <span>{task.reward} GLR</span></div>
+                            <div><Clock size={14} /> <span>{new Date(task.createdAt).toLocaleDateString()}</span></div>
+                            {task.verificationStatus && <div><CheckCircle size={14} /> <span>{task.verificationStatus}</span></div>}
                           </div>
-                        </div>
-                      </div>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </section>
 
               {selectedTask && (
                 <section className="fade-in-left">
-                  <div className="card glass" style={{ position: 'sticky', top: '2rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
-                      <h2>{selectedTask.title}</h2>
+                  <div className="card glass task-detail-card">
+                    <div className="task-detail-head">
+                      <div>
+                        <div className="hero-badge task-detail-badge"><Target size={14} /> Open listing</div>
+                        <h2>{selectedTask.title}</h2>
+                      </div>
                       <button className="btn btn-ghost" onClick={() => setSelectedTask(null)}><X size={16} /></button>
                     </div>
-                    <div style={{ marginBottom: '1.5rem' }}>
-                      <p style={{ fontSize: '0.9rem' }}>{selectedTask.description}</p>
+                    <p className="task-detail-copy">{selectedTask.description}</p>
+                    <div className="task-detail-chip-row">
+                      <span className="task-detail-chip"><Zap size={14} /> {selectedTask.reward} GLR</span>
+                      <span className="task-detail-chip"><Clock size={14} /> {new Date(selectedTask.createdAt).toLocaleDateString()}</span>
+                      <span className={`badge badge-${selectedTask.status.toLowerCase()}`}>{selectedTask.status}</span>
                     </div>
+                    {resolveAgent(selectedTask.assignedAgent) && (
+                      <div className="task-assignee">
+                        <div className="task-assignee-label">Assigned agent</div>
+                        <div className="task-assignee-name">{resolveAgent(selectedTask.assignedAgent)?.name}</div>
+                        <div className="task-assignee-meta">{resolveAgent(selectedTask.assignedAgent)?.specialty}</div>
+                      </div>
+                    )}
                     {(selectedTask.txId || selectedTask.blockNumber) && (
-                      <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', background: 'var(--card-bg)', padding: '0.5rem 0.75rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid var(--border)' }}>
-                        {selectedTask.txId && <div>TX: <span style={{ color: 'var(--accent-primary)' }}>{selectedTask.txId}</span></div>}
-                        {selectedTask.blockNumber && (
-                          <div style={{ marginTop: '0.2rem' }}>Block: <span style={{ color: 'var(--accent-primary)' }}>#{selectedTask.blockNumber}</span></div>
-                        )}
+                      <div className="task-ledger-box">
+                        {selectedTask.txId && <div>TX: <span>{selectedTask.txId}</span></div>}
+                        {selectedTask.blockNumber && <div>Block: <span>#{selectedTask.blockNumber}</span></div>}
                       </div>
                     )}
                     {selectedTask.status === 'PENDING' && (
-                      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
-                        onClick={() => executeTask(selectedTask.id)}>
+                      <button className="btn btn-primary task-execute-btn" onClick={() => executeTask(selectedTask.id)}>
                         <Terminal size={18} /> Execute Agent
                       </button>
                     )}
                     {selectedTask.status === 'EXECUTING' && (
-                      <div className="card glass executing-container" style={{ borderStyle: 'dashed', textAlign: 'center' }}>
+                      <div className="card glass executing-container task-executing-card">
                         <div className="spinner" style={{ marginBottom: '0.75rem' }}></div>
-                        <p style={{ fontSize: '0.9rem' }}>Agent is processing task...</p>
+                        <p style={{ fontSize: '0.9rem' }}>Agent is processing the job...</p>
                       </div>
                     )}
                     {selectedTask.status === 'FAILED' && (
-                      <div style={{ color: 'var(--danger)', fontSize: '0.9rem', marginBottom: '1rem', padding: '0.75rem', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                      <div className="task-fail-box">
                         <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Execution Failed</div>
                         <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>{selectedTask.result?.summary || 'No error details available'}</div>
                       </div>
@@ -572,13 +718,13 @@ function App() {
                             <div className="task-result-confidence">Confidence {(selectedTask.confidenceScore * 100).toFixed(0)}%</div>
                           )}
                         </div>
-                        <div className="card" style={{ background: '#0a0a0a', borderRadius: '10px', padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                        <div className="card task-execution-card">
                            {selectedTask.executionTrace?.plan.map((line, i) => (
-                             <div key={i} style={{ marginBottom: '0.4rem' }}>
-                               <span style={{ color: '#555' }}>[{i + 1}]</span> <span style={{ color: 'var(--accent-primary)' }}>$</span> {line}
+                             <div key={i} className="task-execution-line">
+                               <span>[{i + 1}]</span> <span>$</span> {line}
                              </div>
                            ))}
-                           <div style={{ color: 'var(--success)', marginTop: '0.75rem' }}>✓ {selectedTask.result?.summary}</div>
+                           <div className="task-execution-footer">✓ {selectedTask.result?.summary}</div>
                         </div>
                         {selectedTask.result?.data && (
                           <div className="task-result-grid">
