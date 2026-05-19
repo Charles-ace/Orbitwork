@@ -16,6 +16,17 @@ function logger() {
   return log || { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 }
 
+function cleanEnv(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveNetworkFromEnv() {
+  const explicitNetwork = cleanEnv(process.env.GENLAYER_NETWORK).toLowerCase();
+  if (explicitNetwork) return explicitNetwork;
+  if (cleanEnv(process.env.GENLAYER_CONTRACT_ADDRESS)) return 'bradbury';
+  return process.env.VERCEL_ENV === 'production' ? 'bradbury' : 'localnet';
+}
+
 export function simLatency(ms = 2000) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -32,7 +43,7 @@ function mockTx(type, data) {
 }
 
 async function initRealBridge() {
-  const network = (process.env.GENLAYER_NETWORK || 'localnet').toLowerCase();
+  const network = resolveNetworkFromEnv();
   networkName = network;
 
   try {
@@ -96,8 +107,8 @@ async function buildChainConfig(network) {
 
 export async function init(customLogger) {
   if (customLogger) log = customLogger;
-  contractAddress = process.env.GENLAYER_CONTRACT_ADDRESS || null;
-  const mode = process.env.GENLAYER_MODE || 'mock';
+  contractAddress = cleanEnv(process.env.GENLAYER_CONTRACT_ADDRESS) || null;
+  const mode = cleanEnv(process.env.GENLAYER_MODE) || (contractAddress ? 'real' : 'mock');
 
   if (contractAddress && mode === 'real') {
     console.log(`\n  ⚡ Initializing GenLayer Bridge...`);

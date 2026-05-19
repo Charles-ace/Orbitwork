@@ -1432,9 +1432,10 @@ async function start() {
   logger.info('Database connected');
   await bridge.init(logger);
 
-  if (bridge.isMockMode() && process.env.GENLAYER_MODE === 'real') {
+  const configuredForReal = (process.env.GENLAYER_MODE || '').trim() === 'real' || !!(process.env.GENLAYER_CONTRACT_ADDRESS || '').trim();
+  if (bridge.isMockMode() && configuredForReal) {
     const msg = 'FATAL: bridge.init() failed to connect to GenLayer — deployment cannot proceed without a real contract. Check GENLAYER_CONTRACT_ADDRESS and GENLAYER_NETWORK.';
-    logger.fatal({ contractAddress: process.env.GENLAYER_CONTRACT_ADDRESS, network: process.env.GENLAYER_NETWORK }, msg);
+    logger.fatal({ contractAddress: (process.env.GENLAYER_CONTRACT_ADDRESS || '').trim(), network: (process.env.GENLAYER_NETWORK || '').trim() }, msg);
     process.exit(1);
   }
 

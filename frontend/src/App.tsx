@@ -182,6 +182,14 @@ function App() {
   const GENLAYER_RPC = networkInfo?.network === 'bradbury'
     ? 'https://rpc-bradbury.genlayer.com'
     : 'http://127.0.0.1:8545';
+  const networkName = (networkInfo?.network || '').trim().toLowerCase();
+  const isLiveNetwork = networkInfo?.mode === 'live' || networkName === 'bradbury';
+  const networkBadgeLabel = isLiveNetwork
+    ? `GenLayer ${networkName === 'bradbury' ? 'Bradbury' : (networkInfo?.network || 'Localnet')}`
+    : 'Mock Mode';
+  const footerNetworkLabel = isLiveNetwork
+    ? (networkName === 'bradbury' ? 'Bradbury' : (networkInfo?.network || 'live'))
+    : 'mock';
 
   const switchToGenLayer = async (provider: ethers.providers.Web3Provider) => {
     try {
@@ -284,7 +292,7 @@ function App() {
               <div className="network-badge" data-mode={networkInfo.mode}>
                 <span className="network-badge-dot" />
                 <span className="network-badge-name">
-                  {networkInfo.mode === 'live' ? 'GenLayer ' + networkInfo.network : 'Mock Mode'}
+                  {networkBadgeLabel}
                 </span>
                 {networkInfo.contractAddress && (
                   <span className="network-badge-contract" onClick={() => copyToClipboard(networkInfo.contractAddress!)} title="Copy contract address">
@@ -680,7 +688,7 @@ function App() {
                 <>
                   <span className="footer-network-badge" data-mode={networkInfo.mode}>
                     <span className="footer-network-dot" />
-                    {networkInfo.mode === 'live' ? networkInfo.network : 'mock'}
+                    {footerNetworkLabel}
                   </span>
                   {networkInfo.contractAddress && (
                     <span className="footer-contract" onClick={() => copyToClipboard(networkInfo.contractAddress!)} title="Copy contract address">

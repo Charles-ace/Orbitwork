@@ -106,8 +106,8 @@ let ready = (async () => {
   // Safe mock bridge fallback with error diagnostic reporting
   bridge = {
     isMockMode: () => true,
-    getNetworkName: () => 'studionet',
-    getContractAddress: () => process.env.GENLAYER_CONTRACT_ADDRESS,
+    getNetworkName: () => (process.env.GENLAYER_NETWORK || 'bradbury').trim().toLowerCase(),
+    getContractAddress: () => (process.env.GENLAYER_CONTRACT_ADDRESS || '').trim() || null,
     getInitError: () => err.message + '\n' + (err.stack || ''),
     getLedger: () => [],
     getTaskCount: async () => 0,
