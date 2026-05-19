@@ -21,7 +21,14 @@ interface ExecutionTrace {
 
 interface TaskResult {
   summary: string;
-  data: { analysis: string; findings: string; recommendation: string };
+  data: {
+    analysis: string;
+    findings: string;
+    recommendation: string;
+    bullets?: string[];
+    audience?: string;
+    why_this_matters?: string;
+  };
 }
 
 interface Task {
@@ -81,6 +88,40 @@ const iconMap: Record<string, React.ReactNode> = {
   shield: <Shield size={18} />,
   search: <Search size={18} />,
 };
+
+function getRecommendedAgent(taskTitle: string, taskDescription: string, agents: Agent[]) {
+  if (!agents.length) return null;
+
+  const query = `${taskTitle} ${taskDescription}`.toLowerCase();
+
+  const scored = agents.map(agent => {
+    let score = 0;
+    const haystack = `${agent.name} ${agent.model} ${agent.specialty} ${agent.description} ${agent.useCases.join(' ')} ${agent.skills.join(' ')}`.toLowerCase();
+
+    const match = (keywords: string[], points: number) => {
+      if (keywords.some(keyword => query.includes(keyword))) {
+        score += points;
+      }
+    };
+
+    match(['security', 'audit', 'vulnerability', 'reentrancy', 'threat', 'exploit', 'smart contract'], 5);
+    match(['code', 'bug', 'debug', 'refactor', 'review', 'typescript', 'react', 'frontend', 'api'], 4);
+    match(['research', 'analysis', 'summarize', 'summary', 'compare', 'market', 'strategy'], 4);
+    match(['data', 'dataset', 'chart', 'csv', 'visualization', 'trend', 'report', 'finance'], 4);
+    match(['content', 'copy', 'blog', 'marketing', 'social', 'write', 'article', 'narrative'], 3);
+
+    if (haystack.includes('security') && /security|audit|vulnerability|reentrancy|threat/.test(query)) score += 4;
+    if (haystack.includes('code') && /code|bug|debug|refactor|typescript|react|api/.test(query)) score += 4;
+    if (haystack.includes('research') && /research|analysis|summarize|summary|compare|market|strategy/.test(query)) score += 4;
+    if (haystack.includes('data') && /data|dataset|chart|csv|visualization|finance|report/.test(query)) score += 4;
+    if (haystack.includes('content') && /content|copy|blog|marketing|social|write|article/.test(query)) score += 4;
+
+    return { agent, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score || a.agent.completedTasks - b.agent.completedTasks);
+  return scored[0]?.agent || agents[0] || null;
+}
 
 function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
@@ -145,12 +186,13 @@ function App() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const recommended = getRecommendedAgent(newTask.title, newTask.description, agents);
       await axios.post(`${API_BASE}/tasks`, {
         title: newTask.title,
         description: newTask.description,
         reward: Number(newTask.reward),
         deadline: newTask.deadline,
-        assignedAgent: newTask.selectedAgent || agents[0]?.id,
+        assignedAgent: newTask.selectedAgent || recommended?.id || agents[0]?.id,
       });
       setShowForm(false);
       setNewTask({ title: '', description: '', reward: 0, deadline: '', selectedAgent: '' });
@@ -190,6 +232,7 @@ function App() {
   const footerNetworkLabel = isLiveNetwork
     ? (networkName === 'bradbury' ? 'Bradbury' : (networkInfo?.network || 'live'))
     : 'mock';
+  const recommendedTaskAgent = getRecommendedAgent(newTask.title, newTask.description, agents);
 
   const switchToGenLayer = async (provider: ethers.providers.Web3Provider) => {
     try {
@@ -522,6 +565,13 @@ function App() {
                           <CheckCircle size={18} />
                           <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>GenLayer Verified</span>
                         </div>
+                        <div className="task-result-summary">
+                          <div className="task-result-label">Result Summary</div>
+                          <div className="task-result-summary-text">{selectedTask.result?.summary}</div>
+                          {typeof selectedTask.confidenceScore === 'number' && (
+                            <div className="task-result-confidence">Confidence {(selectedTask.confidenceScore * 100).toFixed(0)}%</div>
+                          )}
+                        </div>
                         <div className="card" style={{ background: '#0a0a0a', borderRadius: '10px', padding: '0.75rem', fontFamily: 'monospace', fontSize: '0.8rem' }}>
                            {selectedTask.executionTrace?.plan.map((line, i) => (
                              <div key={i} style={{ marginBottom: '0.4rem' }}>
@@ -530,6 +580,48 @@ function App() {
                            ))}
                            <div style={{ color: 'var(--success)', marginTop: '0.75rem' }}>✓ {selectedTask.result?.summary}</div>
                         </div>
+                        {selectedTask.result?.data && (
+                          <div className="task-result-grid">
+                            {selectedTask.result.data.bullets?.length ? (
+                              <div className="task-result-panel">
+                                <div className="task-result-panel-title">Key bullets</div>
+                                <ul className="task-result-bullets">
+                                  {selectedTask.result.data.bullets.map((bullet, i) => <li key={i}>{bullet}</li>)}
+                                </ul>
+                              </div>
+                            ) : null}
+                            {selectedTask.result.data.analysis && (
+                              <div className="task-result-panel">
+                                <div className="task-result-panel-title">Analysis</div>
+                                <p>{selectedTask.result.data.analysis}</p>
+                              </div>
+                            )}
+                            {selectedTask.result.data.findings && (
+                              <div className="task-result-panel">
+                                <div className="task-result-panel-title">Findings</div>
+                                <p>{selectedTask.result.data.findings}</p>
+                              </div>
+                            )}
+                            {selectedTask.result.data.recommendation && (
+                              <div className="task-result-panel">
+                                <div className="task-result-panel-title">Recommendation</div>
+                                <p>{selectedTask.result.data.recommendation}</p>
+                              </div>
+                            )}
+                            {selectedTask.result.data.audience && (
+                              <div className="task-result-panel">
+                                <div className="task-result-panel-title">Audience</div>
+                                <p>{selectedTask.result.data.audience}</p>
+                              </div>
+                            )}
+                            {selectedTask.result.data.why_this_matters && (
+                              <div className="task-result-panel">
+                                <div className="task-result-panel-title">Why it matters</div>
+                                <p>{selectedTask.result.data.why_this_matters}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -651,14 +743,52 @@ function App() {
                 <div><label>Reward (GLR)</label><input type="number" value={newTask.reward} onChange={e => setNewTask({ ...newTask, reward: Number(e.target.value) })} /></div>
                 <div><label>Deadline</label><input type="date" value={newTask.deadline} onChange={e => setNewTask({ ...newTask, deadline: e.target.value })} /></div>
               </div>
-              <label style={{ marginTop: '0.5rem' }}>Assign Agent</label>
-              <select value={newTask.selectedAgent} onChange={e => setNewTask({ ...newTask, selectedAgent: e.target.value })}
-                style={{ width: '100%', padding: '0.65rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: 'var(--text-primary)', fontSize: '0.9rem', fontFamily: 'inherit' }}>
-                <option value="">Auto-assign (first available)</option>
-                {agents.map(a => (
-                  <option key={a.id} value={a.id}>{a.name} — {a.specialty}</option>
-                ))}
-              </select>
+              <div style={{ marginTop: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.5rem' }}>
+                  <label style={{ margin: 0 }}>Assign Agent</label>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    {recommendedTaskAgent ? `Recommended: ${recommendedTaskAgent.name}` : 'Pick the best fit'}
+                  </span>
+                </div>
+                <div className="agent-picker-grid">
+                  {agents.map(agent => {
+                    const isSelected = newTask.selectedAgent ? newTask.selectedAgent === agent.id : recommendedTaskAgent?.id === agent.id;
+                    const isRecommended = recommendedTaskAgent?.id === agent.id;
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        className={`agent-picker-card ${isSelected ? 'selected' : ''} accent-${agent.accent}`}
+                        onClick={() => setNewTask({ ...newTask, selectedAgent: agent.id })}
+                      >
+                        <div className="agent-picker-top">
+                          <div>
+                            <div className="agent-picker-name">{agent.name}</div>
+                            <div className="agent-picker-specialty">{agent.specialty}</div>
+                          </div>
+                          <div className="agent-picker-meta">
+                            <span>{agent.price.toFixed(2)} GLR</span>
+                            <span>•</span>
+                            <span>{agent.completedTasks} done</span>
+                          </div>
+                        </div>
+                        <div className="agent-picker-tags">
+                          {isRecommended && <span className="agent-picker-badge">Recommended</span>}
+                          <span className="agent-picker-badge subtle">{agent.status}</span>
+                          {agent.skills.slice(0, 2).map(skillId => {
+                            const skill = skills.find(s => s.id === skillId);
+                            return skill ? <span key={skill.id} className="agent-picker-badge subtle">{skill.label}</span> : null;
+                          })}
+                        </div>
+                        <p className="agent-picker-description">{agent.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button type="button" className="btn btn-ghost" style={{ marginTop: '0.75rem', width: '100%' }} onClick={() => setNewTask({ ...newTask, selectedAgent: '' })}>
+                  Use recommended agent
+                </button>
+              </div>
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Submit Task</button>
                 <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>

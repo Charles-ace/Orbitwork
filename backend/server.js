@@ -447,11 +447,11 @@ async function seedDatabase() {
       await prisma.task.create({ data: task });
     }
     logger.info({ count: seedTasks.length }, 'Seeded tasks');
-  } else if (bridge.isMockMode()) {
-    const maxContractId = await prisma.task.aggregate({ _max: { contractTaskId: true } });
-    if (maxContractId._max.contractTaskId) {
-      bridge.setMockContractId(maxContractId._max.contractTaskId);
-    }
+  }
+
+  const maxContractId = await prisma.task.aggregate({ _max: { contractTaskId: true } });
+  if (maxContractId._max.contractTaskId) {
+    bridge.setMockContractId(maxContractId._max.contractTaskId);
   }
 }
 
@@ -985,7 +985,7 @@ app.post(apiRoute('/tasks'), requireAuth, validate(taskCreateSchema), async (req
 
 // ── Agent Execution ──────────────────────────────────────────
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = 'qwen/qwen-2.5-coder:free';
+const OPENROUTER_MODEL = 'openai/gpt-4o-mini';
 
 /**
  * @openapi
@@ -1045,18 +1045,29 @@ app.post(apiRoute('/tasks/:id/execute'), requireAuth, async (req, res) => {
       skillsBlock = `You have these expert skills: ${skillLabels}.\n${skillDirectives}\n\n`;
     }
 
-    const systemPrompt = `You are an AI agent executing tasks on the Orbitjob marketplace. ${skillsBlock}Analyze the task and respond with valid JSON only (no markdown, no code fences):
+    const systemPrompt = `You are an AI agent executing tasks on the Orbitjob marketplace. ${skillsBlock}Analyze the task and respond with valid JSON only (no markdown, no code fences).
+Be specific, task-aware, and concrete. Avoid generic filler.
+If the prompt asks for bullets, include them in result.data.bullets.
+Always produce at least 3 reasoning steps and 3 concrete bullet points when possible.
 
 {
   "reasoning_trace": ["step 1 description", "step 2 description", ...],
   "result": {
-    "summary": "brief summary of what was done",
-    "data": { "analysis": "detailed analysis", "findings": "key findings", "recommendation": "recommendation" }
+    "summary": "a concise but informative summary",
+    "data": {
+      "bullets": ["bullet 1", "bullet 2", "bullet 3"],
+      "analysis": "detailed task-specific analysis",
+      "findings": "specific findings",
+      "recommendation": "actionable recommendation",
+      "audience": "who this is for",
+      "why_this_matters": "why this result matters"
+    }
   },
   "confidence": 0.0 to 1.0
 }
 
-The confidence score should reflect how well you believe you fulfilled the task. Be honest.`;
+The confidence score should reflect how well you believe you fulfilled the task. Be honest.
+Never return a vague placeholder summary.`;
     const hasOpenRouter = !!OPENROUTER_API_KEY && OPENROUTER_API_KEY !== 'your_openrouter_api_key_here';
     let reasoningTrace;
     let aiResult;
@@ -1064,21 +1075,28 @@ The confidence score should reflect how well you believe you fulfilled the task.
 
     if (!hasOpenRouter) {
       logger.warn({ taskId: id }, 'OPENROUTER_API_KEY is missing, using offline fallback execution');
-      reasoningTrace = [
-        `Review task: ${task.title}`,
-        'Prepare a concise offline completion path',
-        'Return a fallback response because OpenRouter is not configured',
-      ];
-      aiResult = {
-        summary: `Completed offline fallback for "${task.title}".`,
-        data: {
-          analysis: task.description || '',
-          findings: 'Orbitjob executed without OpenRouter because the production key is missing.',
-          recommendation: 'Set OPENROUTER_API_KEY in production to enable live AI reasoning.',
-        },
-      };
-      confidence = 0.82;
-    } else {
+          reasoningTrace = [
+            `Review task: ${task.title}`,
+            'Prepare a concise offline completion path',
+            'Return a fallback response because OpenRouter is not configured',
+          ];
+          aiResult = {
+            summary: `Completed offline fallback for "${task.title}".`,
+            data: {
+              bullets: [
+                task.title || 'Reviewed the task title.',
+                task.description || 'Reviewed the task description.',
+                'Execution completed through the offline fallback path.',
+              ],
+              analysis: task.description || '',
+              findings: 'Orbitjob executed without OpenRouter because the production key is missing.',
+              recommendation: 'Set OPENROUTER_API_KEY in production to enable live AI reasoning.',
+              audience: 'Orbitjob operators and task creators',
+              why_this_matters: 'The task still completes, but richer reasoning requires the live model path.',
+            },
+          };
+          confidence = 0.84;
+        } else {
       const { data } = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
@@ -1087,8 +1105,8 @@ The confidence score should reflect how well you believe you fulfilled the task.
             { role: 'system', content: systemPrompt },
             { role: 'user', content: `Title: ${task.title}\n\nDescription: ${task.description}\n\nConstraints: ${task.constraints || 'None'}` }
           ],
-          temperature: 0.3, max_tokens: 1024
-        },
+            temperature: 0.2, max_tokens: 1400
+          },
         {
           headers: {
             'Authorization': `Bearer ${OPENROUTER_API_KEY}`,

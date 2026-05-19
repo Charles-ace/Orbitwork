@@ -91,16 +91,26 @@ const seedAgents = [
 ];
 
 // ── Persistent Storage ──
-let taskCache = [];
+let taskCache = db.loadTasks(seedTasks);
+
+function syncMockContractCounter(tasks = taskCache) {
+  if (!bridge || typeof bridge.setMockContractId !== 'function') return;
+
+  const maxContractId = tasks.reduce((max, task) => {
+    const value = Number(task?.contractTaskId);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
+
+  if (maxContractId > 0) {
+    bridge.setMockContractId(maxContractId);
+  }
+}
 
 let ready = (async () => {
   // Dynamically import the ES Module bridge located in the same directory!
   bridge = await import('./genlayer-bridge.mjs');
   await bridge.init();
-  if (bridge.isMockMode()) {
-    taskCache.push(...seedTasks);
-    db.setTasks(taskCache);
-  }
+  syncMockContractCounter();
 })().catch(err => {
   console.error('ESM Bridge init failed:', err.message, err.stack);
   // Safe mock bridge fallback with error diagnostic reporting
@@ -115,8 +125,7 @@ let ready = (async () => {
     submitExecution: async () => 'tx_error_fallback',
     getOnchainTask: async () => null,
   };
-  taskCache.push(...seedTasks);
-  db.setTasks(taskCache);
+  syncMockContractCounter();
 });
 let agents = db.loadAgents(seedAgents);
 
@@ -463,38 +472,52 @@ module.exports = async (req, res) => {
           aiResult = {
             summary: `Completed offline fallback for "${task.title}".`,
             data: {
+              bullets: [
+                task.title || 'Reviewed the task title.',
+                task.description || 'Reviewed the task description.',
+                'Execution completed through the offline fallback path.',
+              ],
               analysis: task.description || '',
               findings: `Orbitjob executed without OpenRouter because the production key is missing.`,
               recommendation: 'Set OPENROUTER_API_KEY in Vercel production to enable live AI reasoning.',
+              audience: 'Orbitjob operators and task creators',
+              why_this_matters: 'The task still completes, but richer reasoning requires the live model path.',
             },
           };
-          confidence = 0.82;
+          confidence = 0.84;
         } else {
-          const systemPrompt = `You are an AI agent executing tasks on the Orbitjob marketplace. Analyze the task and respond with valid JSON only (no markdown, no code fences):
+          const systemPrompt = `You are an AI agent executing tasks on the Orbitjob marketplace. Analyze the task and respond with valid JSON only (no markdown, no code fences).
+Be specific, task-aware, and concrete. Avoid generic filler.
+If the prompt asks for bullets, include them in result.data.bullets.
+Always produce at least 3 reasoning steps and 3 concrete bullet points when possible.
 
 {
   "reasoning_trace": ["step 1 description", "step 2 description", ...],
   "result": {
-    "summary": "brief summary of what was done",
+    "summary": "a concise but informative summary",
     "data": {
-      "analysis": "detailed analysis",
-      "findings": "key findings",
-      "recommendation": "recommendation"
+      "bullets": ["bullet 1", "bullet 2", "bullet 3"],
+      "analysis": "detailed task-specific analysis",
+      "findings": "specific findings",
+      "recommendation": "actionable recommendation",
+      "audience": "who this is for",
+      "why_this_matters": "why this result matters"
     }
   },
   "confidence": 0.0 to 1.0
 }
 
-The confidence score should reflect how well you believe you fulfilled the task. Be honest.`;
+The confidence score should reflect how well you believe you fulfilled the task. Be honest.
+Never return a vague placeholder summary.`;
 
           const { data } = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-            model: 'qwen/qwen-2.5-coder:free',
+            model: 'openai/gpt-4o-mini',
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: `Title: ${task.title}\n\nDescription: ${task.description}\n\nConstraints: ${task.constraints || 'None'}` }
             ],
-            temperature: 0.3,
-            max_tokens: 1024
+            temperature: 0.2,
+            max_tokens: 1400
           }, {
             headers: {
               Authorization: `Bearer ${OPENROUTER_API_KEY}`,
