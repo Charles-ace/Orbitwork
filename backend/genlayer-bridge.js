@@ -52,6 +52,7 @@ async function initRealBridge() {
       address: contractAddress,
       functionName: 'get_task_count',
       args: [],
+      stateStatus: 'accepted',
     });
     logger().info({ network, taskCount: Number(counter) }, `Connected to ${network}. Task count: ${counter}`);
 
@@ -140,11 +141,12 @@ async function postTask(title, description, reward, constraints, deadline) {
       const decoded = receipt.txDataDecoded || receipt.data || {};
       throw new Error(`Contract execution failed: ${receipt.txExecutionResultName} — ${JSON.stringify(decoded)}`);
     }
-    const taskCounter = await realClient.readContract({
-      address: contractAddress,
-      functionName: 'get_task_count',
-      args: [],
-    });
+      const taskCounter = await realClient.readContract({
+        address: contractAddress,
+        functionName: 'get_task_count',
+        args: [],
+        stateStatus: 'accepted',
+      });
     return {
       txId: txHash,
       contractId: Number(taskCounter),
@@ -207,6 +209,7 @@ async function getTaskCount() {
         address: contractAddress,
         functionName: 'get_task_count',
         args: [],
+        stateStatus: 'accepted',
       });
       return Number(result);
     } catch { return mockContractId; }
@@ -218,9 +221,9 @@ async function getOnchainTask(taskId) {
   if (!mockMode && realClient) {
     try {
       const [title, status, output] = await Promise.all([
-        realClient.readContract({ address: contractAddress, functionName: 'get_task_title', args: [String(taskId)] }),
-        realClient.readContract({ address: contractAddress, functionName: 'get_task_status', args: [String(taskId)] }),
-        realClient.readContract({ address: contractAddress, functionName: 'get_task_output', args: [String(taskId)] }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_title', args: [String(taskId)], stateStatus: 'accepted' }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_status', args: [String(taskId)], stateStatus: 'accepted' }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_output', args: [String(taskId)], stateStatus: 'accepted' }),
       ]);
       return { title, status, output };
     } catch { return null; }

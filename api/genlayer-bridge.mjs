@@ -54,6 +54,7 @@ async function initRealBridge() {
       address: contractAddress,
       functionName: 'get_task_count',
       args: [],
+      stateStatus: 'accepted',
     });
     logger().info({ network, taskCount: Number(counter) }, `Connected to ${network}. Task count: ${counter}`);
 
@@ -161,6 +162,7 @@ export async function getTaskCount() {
         address: contractAddress,
         functionName: 'get_task_count',
         args: [],
+        stateStatus: 'accepted',
       });
       return Number(counter);
     } catch { return mockContractId; }
@@ -172,9 +174,9 @@ export async function getOnchainTask(taskId) {
   if (!mockMode && realClient) {
     try {
       const [title, status, output] = await Promise.all([
-        realClient.readContract({ address: contractAddress, functionName: 'get_task_title', args: [String(taskId)] }),
-        realClient.readContract({ address: contractAddress, functionName: 'get_task_status', args: [String(taskId)] }),
-        realClient.readContract({ address: contractAddress, functionName: 'get_task_output', args: [String(taskId)] }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_title', args: [String(taskId)], stateStatus: 'accepted' }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_status', args: [String(taskId)], stateStatus: 'accepted' }),
+        realClient.readContract({ address: contractAddress, functionName: 'get_task_output', args: [String(taskId)], stateStatus: 'accepted' }),
       ]);
       return { title, status, output };
     } catch { return null; }
